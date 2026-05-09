@@ -44,9 +44,9 @@ flowchart TD
     E --> F[Configure Postgres connection<br/>verified via psql]
     F --> G[Execute contradiction test flow]
     G --> H[POST /stories]
-    H --> I[POST /stories/{id}/scenes<br/>major claim]
-    I --> J[POST /stories/{id}/scenes<br/>contradictory major claim]
-    J --> K[POST /stories/{id}/validate]
+    H --> I[POST /stories/:story_id/scenes<br/>major claim]
+    I --> J[POST /stories/:story_id/scenes<br/>contradictory major claim]
+    J --> K[POST /stories/:story_id/validate]
     K --> L[High-severity issue returned<br/>major plotline conflict detected]
 ```
 
