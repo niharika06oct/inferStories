@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -29,12 +30,29 @@ class SceneCreate(BaseModel):
     claims: list[ClaimIn]
 
 
-class ValidationIssueOut(BaseModel):
+class SceneIssueOut(BaseModel):
+    """Issues embedded on a scene response (same scene as parent)."""
+
     model_config = ConfigDict(from_attributes=True)
 
+    id: int
     severity: str
     message: str
     conflicting_claim_id: Optional[int] = None
+    created_at: datetime
+
+
+class ValidationIssueOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    story_id: int
+    scene_id: int
+    scene_number: int
+    severity: str
+    message: str
+    conflicting_claim_id: Optional[int] = None
+    created_at: datetime
 
 
 class SceneOut(BaseModel):
@@ -44,4 +62,4 @@ class SceneOut(BaseModel):
     story_id: int
     scene_number: int
     text: str
-    issues: list[ValidationIssueOut] = Field(default_factory=list)
+    issues: list[SceneIssueOut] = Field(default_factory=list)

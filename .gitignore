@@ -8,6 +8,7 @@
 *.py[cod]
 *.sqlite3
 *.db
+apps/api/_alembic_gen.db
 
 # Node / Next (apps/web has its own .gitignore; these cover root tooling)
 **/node_modules/

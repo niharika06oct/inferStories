@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -22,6 +22,9 @@ class Story(Base):
 
 class Scene(Base):
     __tablename__ = "scenes"
+    __table_args__ = (
+        UniqueConstraint("story_id", "scene_number", name="uq_scene_story_scene_number"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     story_id: Mapped[int] = mapped_column(

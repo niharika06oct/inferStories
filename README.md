@@ -1,21 +1,21 @@
 # inferStories
 
-Monorepo for **story continuity memory**: a FastAPI backend (`apps/api`) stores stories, scenes, structured claims, and **persisted validation issues** when later scenes contradict earlier facts. A Next.js app (`apps/web`) is scaffolded for a future UI.
+Monorepo for **story continuity memory**: a FastAPI backend (`apps/api`) stores stories, scenes, structured claims, and **persisted validation issues** when later scenes contradict earlier facts. A Next.js app (`apps/web`) provides a **single-page workflow** (create story → add scenes/claims → view issues with polling).
+
+**Repo:** [github.com/niharika06oct/inferStories](https://github.com/niharika06oct/inferStories)
 
 ## Repository layout
 
 | Path | Role |
 |------|------|
-| `apps/api` | FastAPI + SQLAlchemy + PostgreSQL (`psycopg`) |
-| `apps/web` | Next.js frontend (not yet wired to the API) |
+| `apps/api` | FastAPI + SQLAlchemy + Alembic + PostgreSQL (`psycopg`) |
+| `apps/web` | Next.js UI calling the API (see `lib/api.ts`, `app/StoryWorkspace.tsx`) |
 
 ## Prerequisites
 
-- **Python 3.11+** (backend virtualenv under `apps/api/.venv` locally)
-- **PostgreSQL** reachable from the machine running the API
-- **Node.js** + **pnpm** (for `apps/web` when you develop the UI)
-
-Optional: Docker for Postgres if you do not run it natively.
+- **Python 3.11+** and a venv under `apps/api/.venv` (or create one and `pip install -r requirements.txt`)
+- **PostgreSQL** (local or Docker)
+- **Node.js** + **pnpm** for the frontend
 
 ## Database
 
@@ -29,25 +29,51 @@ Optional: Docker for Postgres if you do not run it natively.
 
    `postgresql+psycopg://postgres:postgres@localhost:5432/writers_ai_memory`
 
-   Override with **`DATABASE_URL`** if your user, password, host, or database name differ.
+   Override with **`DATABASE_URL`** if your credentials differ.
 
-Tables are created automatically on API startup (`create_all`).
+3. **Migrations:** schema is applied with **Alembic** on API startup (`alembic upgrade head`), using `apps/api/alembic.ini` and `apps/api/alembic/`. You can also run upgrades manually from `apps/api`:
 
-## Backend dependencies
+   ```bash
+   cd apps/api && source .venv/bin/activate
+   alembic upgrade head
+   ```
 
-Core packages used by the API: `fastapi`, `uvicorn`, `pydantic`, `sqlalchemy`, `psycopg` (binary driver in practice). `alembic` may be present in the environment for future migrations; the MVP relies on SQLAlchemy metadata creation at startup.
+   The initial revision creates all tables, including a **unique constraint** on `(story_id, scene_number)` so a story cannot have two scenes with the same number (API returns **409** on conflict).
 
 ## Run the API
 
-From the repo root:
-
 ```bash
 cd apps/api
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 uvicorn app.main:app --reload --port 8000
 ```
 
-- OpenAPI docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- OpenAPI: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- CORS allows the default Next dev origins (`localhost:3000`, etc.) for browser `fetch`.
+
+## Run the web app
+
+1. Optional: copy `apps/web/.env.local.example` to `apps/web/.env.local` and set **`NEXT_PUBLIC_API_BASE_URL`** if the API is not on `http://127.0.0.1:8000`.
+
+2. Start Next:
+
+   ```bash
+   cd apps/web
+   pnpm install
+   pnpm dev
+   ```
+
+3. Open [http://localhost:3000](http://localhost:3000): create a story, submit scenes with one or more claims, and watch **validation issues** update (**poll every 4s** plus manual **Refresh**).
+
+## Backend tests
+
+From `apps/api` with the venv active:
+
+```bash
+pytest
+```
+
+Tests use an in-memory SQLite database (`SKIP_ALEMBIC_ON_STARTUP=1`) and cover the contradiction flow, duplicate scene rejection, and **`validate_scene_claims`** behavior.
 
 ## HTTP API (MVP)
 
@@ -55,96 +81,58 @@ uvicorn app.main:app --reload --port 8000
 |--------|------|-------------|
 | `GET` | `/health` | Liveness: `{"status":"ok"}` |
 | `POST` | `/stories` | Create a story (`title`, optional `description`) |
-| `POST` | `/stories/{story_id}/scenes` | Add a scene (`scene_number`, `text`, `claims[]`) |
-| `POST` | `/stories/{story_id}/validate` | Return **stored** validation issues for that story |
+| `POST` | `/stories/{story_id}/scenes` | Add a scene (`scene_number`, `text`, `claims[]`). Returns **409** if `scene_number` duplicates for that story |
+| `POST` | `/stories/{story_id}/validate` | List stored **`ValidationIssue`** rows (includes **`scene_number`**, timestamps, ids for UX) |
 
-**Story IDs** are integer primary keys (e.g. `1` after the first create).
+**Story IDs** are integer primary keys.
 
-**Claims** in JSON use the field name **`object`** for the claim object (subject / predicate / object triple). Internally the DB column is named `object` as well.
+**Claims** in JSON use the field **`object`** for the triple’s object slot.
 
 ### Continuity rule
 
-When a new scene is added, each new claim is checked against **earlier scenes** (lower `scene_number`) in the same story. If the same **`subject`** and **`predicate`** appear but the **`object`** differs, a **`ValidationIssue`** row is stored: **`high`** severity if either claim is marked **`is_major_plotline`**, otherwise **`medium`**.
+When a new scene is saved, each new claim is compared to claims in **earlier** scenes (lower `scene_number`). Same **`subject`** + **`predicate`** but different **`object`** → a stored issue: **`high`** if either side is **`is_major_plotline`**, else **`medium`**.
 
-`POST /stories/{story_id}/validate` returns those persisted issues (newest first by issue id).
-
-### Example: contradiction flow
-
-Assume story id **`1`** after create.
-
-**1. Create story**
+### Example: contradiction (curl)
 
 ```bash
+# 1) Create story — note returned "id"
 curl -s -X POST http://127.0.0.1:8000/stories \
   -H "Content-Type: application/json" \
   -d '{"title":"The Ashen Oath","description":"Fantasy political thriller"}'
-```
 
-**2. Scene 1 — major claim**
-
-```bash
+# 2) Scene 1 — major claim (use your story id)
 curl -s -X POST http://127.0.0.1:8000/stories/1/scenes \
   -H "Content-Type: application/json" \
-  -d '{
-    "scene_number": 1,
-    "text": "Asha swears she will always trust Rohan.",
-    "claims": [
-      {"subject":"Asha","predicate":"trusts","object":"Rohan","is_major_plotline": true}
-    ]
-  }'
-```
+  -d '{"scene_number":1,"text":"Asha swears she will always trust Rohan.","claims":[{"subject":"Asha","predicate":"trusts","object":"Rohan","is_major_plotline":true}]}'
 
-**3. Scene 2 — contradicting claim**
-
-```bash
+# 3) Scene 2 — contradicting major claim
 curl -s -X POST http://127.0.0.1:8000/stories/1/scenes \
   -H "Content-Type: application/json" \
-  -d '{
-    "scene_number": 2,
-    "text": "Asha never trusted Rohan.",
-    "claims": [
-      {"subject":"Asha","predicate":"trusts","object":"Nobody","is_major_plotline": true}
-    ]
-  }'
-```
+  -d '{"scene_number":2,"text":"Asha never trusted Rohan.","claims":[{"subject":"Asha","predicate":"trusts","object":"Nobody","is_major_plotline":true}]}'
 
-**4. List stored issues**
-
-```bash
+# 4) Issues
 curl -s -X POST http://127.0.0.1:8000/stories/1/validate
 ```
-
-You should see a **high** severity issue referencing the major plotline conflict.
-
-## Run the web app (optional)
-
-```bash
-cd apps/web
-pnpm install
-pnpm dev
-```
-
-Visit the URL printed in the terminal (commonly [http://localhost:3000](http://localhost:3000)). The UI does not yet call the backend; that is the next milestone.
 
 ## Workflow (high level)
 
 ```mermaid
 flowchart TD
-    A[Install Python, Node, pnpm, PostgreSQL] --> B[Clone repo + create DB]
+    A[Install Python, Node, pnpm, PostgreSQL] --> B[Clone repo + createdb]
     B --> C[apps/api venv + DATABASE_URL]
-    C --> D[uvicorn app.main:app]
-    D --> E[POST /stories]
-    E --> F[POST /stories/id/scenes with claims]
-    F --> G[Contradictions persisted as ValidationIssue]
-    G --> H[POST /stories/id/validate returns issues]
+    C --> D[uvicorn — Alembic migrates on startup]
+    D --> E[Next.js + NEXT_PUBLIC_API_BASE_URL]
+    E --> F[POST /stories → scenes → validate / poll]
 ```
 
-## Next milestone
+## Roadmap (scale & UX)
 
-Wire **`apps/web`** to **`apps/api`** for a single-page flow:
+Planned next steps (not implemented yet):
 
-1. Create story  
-2. Add scene + claims  
-3. Show validation issues after each scene (poll or refresh)
+- **Background jobs:** claim extraction / heavy validation on a **Redis-backed queue** so HTTP stays fast.
+- **Realtime:** **SSE or WebSocket** push for new issues instead of only polling.
+- **Issues model:** dedupe keys, stable references to conflicting pairs, richer payloads for editors.
 
-**Repo:** [github.com/niharika06oct/inferStories](https://github.com/niharika06oct/inferStories)
+---
+
+Dependencies are listed in **`apps/api/requirements.txt`**.
