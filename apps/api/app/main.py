@@ -5,16 +5,25 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models import Claim, Scene, Story, ValidationIssue
+from app.ai_description import generate_story_description
 from app.schemas import (
+    ClaimOut,
     SceneCreate,
+    SceneDetailOut,
     SceneOut,
+    SceneSummaryOut,
+    SceneUpdate,
     StoryCreate,
+    StoryDescriptionOut,
+    StoryListOut,
     StoryOut,
+    StoryUpdate,
     ValidationIssueOut,
 )
 from app.validation import validate_scene_claims
@@ -82,6 +91,30 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/stories", response_model=list[StoryListOut])
+def list_stories(db: Session = Depends(get_db)):
+    rows = (
+        db.query(
+            Story,
+            func.count(Scene.id).label("scene_count"),
+        )
+        .outerjoin(Scene, Scene.story_id == Story.id)
+        .group_by(Story.id)
+        .order_by(Story.created_at.desc())
+        .all()
+    )
+    return [
+        StoryListOut(
+            id=story.id,
+            title=story.title,
+            description=story.description,
+            created_at=story.created_at,
+            scene_count=scene_count,
+        )
+        for story, scene_count in rows
+    ]
+
+
 @app.post("/stories", response_model=StoryOut)
 def create_story(payload: StoryCreate, db: Session = Depends(get_db)):
     story = Story(title=payload.title, description=payload.description)
@@ -89,6 +122,181 @@ def create_story(payload: StoryCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(story)
     return story
+
+
+@app.get("/stories/{story_id}", response_model=StoryOut)
+def get_story(story_id: int, db: Session = Depends(get_db)):
+    story = db.get(Story, story_id)
+    if not story:
+        raise HTTPException(status_code=404, detail="Story not found")
+    return story
+
+
+@app.patch("/stories/{story_id}", response_model=StoryOut)
+def update_story(
+    story_id: int, payload: StoryUpdate, db: Session = Depends(get_db)
+):
+    story = db.get(Story, story_id)
+    if not story:
+        raise HTTPException(status_code=404, detail="Story not found")
+    if payload.title is None and payload.description is None:
+        raise HTTPException(
+            status_code=400, detail="Provide title and/or description to update"
+        )
+    if payload.title is not None:
+        story.title = payload.title
+    if payload.description is not None:
+        story.description = payload.description.strip() or None
+    db.commit()
+    db.refresh(story)
+    return story
+
+
+@app.post(
+    "/stories/{story_id}/generate-description",
+    response_model=StoryDescriptionOut,
+)
+def generate_story_description_endpoint(
+    story_id: int, db: Session = Depends(get_db)
+):
+    story = db.get(Story, story_id)
+    if not story:
+        raise HTTPException(status_code=404, detail="Story not found")
+
+    scenes = (
+        db.query(Scene)
+        .filter(Scene.story_id == story_id)
+        .order_by(Scene.scene_number.asc())
+        .all()
+    )
+    if not scenes:
+        raise HTTPException(
+            status_code=400,
+            detail="Add at least one scene before generating a description",
+        )
+
+    scene_payload = [(s.scene_number, s.text) for s in scenes]
+    description, source = generate_story_description(story.title, scene_payload)
+    story.description = description
+    db.commit()
+    return StoryDescriptionOut(description=description, source=source)
+
+
+@app.get("/stories/{story_id}/scenes", response_model=list[SceneSummaryOut])
+def list_scenes(story_id: int, db: Session = Depends(get_db)):
+    story = db.get(Story, story_id)
+    if not story:
+        raise HTTPException(status_code=404, detail="Story not found")
+
+    rows = (
+        db.query(
+            Scene,
+            func.count(Claim.id).label("claim_count"),
+        )
+        .outerjoin(Claim, Claim.scene_id == Scene.id)
+        .filter(Scene.story_id == story_id)
+        .group_by(Scene.id)
+        .order_by(Scene.scene_number.asc())
+        .all()
+    )
+    return [
+        SceneSummaryOut(
+            id=scene.id,
+            story_id=scene.story_id,
+            scene_number=scene.scene_number,
+            text=scene.text,
+            created_at=scene.created_at,
+            claim_count=claim_count,
+        )
+        for scene, claim_count in rows
+    ]
+
+
+@app.get("/stories/{story_id}/scenes/{scene_id}", response_model=SceneDetailOut)
+def get_scene(story_id: int, scene_id: int, db: Session = Depends(get_db)):
+    scene = (
+        db.query(Scene)
+        .options(joinedload(Scene.claims))
+        .filter(Scene.id == scene_id, Scene.story_id == story_id)
+        .first()
+    )
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    return SceneDetailOut(
+        id=scene.id,
+        story_id=scene.story_id,
+        scene_number=scene.scene_number,
+        text=scene.text,
+        created_at=scene.created_at,
+        claims=[
+            ClaimOut(
+                id=c.id,
+                subject=c.subject,
+                predicate=c.predicate,
+                object=c.claim_object,
+                is_major_plotline=c.is_major_plotline,
+            )
+            for c in scene.claims
+        ],
+    )
+
+
+@app.patch("/stories/{story_id}/scenes/{scene_id}", response_model=SceneOut)
+def update_scene(
+    story_id: int,
+    scene_id: int,
+    payload: SceneUpdate,
+    db: Session = Depends(get_db),
+):
+    scene = (
+        db.query(Scene)
+        .filter(Scene.id == scene_id, Scene.story_id == story_id)
+        .first()
+    )
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+
+    scene.scene_number = payload.scene_number
+    scene.text = payload.text
+
+    db.query(ValidationIssue).filter(ValidationIssue.scene_id == scene.id).delete(
+        synchronize_session=False
+    )
+    db.query(Claim).filter(Claim.scene_id == scene.id).delete(synchronize_session=False)
+
+    new_claims: list[Claim] = []
+    for c in payload.claims:
+        claim = Claim(
+            story_id=story_id,
+            scene_id=scene.id,
+            subject=c.subject,
+            predicate=c.predicate,
+            claim_object=c.object,
+            is_major_plotline=c.is_major_plotline,
+        )
+        db.add(claim)
+        new_claims.append(claim)
+
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Scene number already exists for this story",
+        ) from None
+
+    validate_scene_claims(db, scene, new_claims)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Constraint violation while saving scene or claims",
+        ) from None
+    db.refresh(scene)
+    return scene
 
 
 @app.post("/stories/{story_id}/scenes", response_model=SceneOut)
