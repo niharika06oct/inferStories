@@ -2,6 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Alert,
+  Badge,
+  Button,
+  FieldLabel,
+  Input,
+  Panel,
+  Spinner,
+  Textarea,
+  cn,
+} from "../components/ui";
+import {
   addScene,
   createStory,
   fetchScene,
@@ -49,201 +60,6 @@ function excerpt(text: string, max = 72): string {
 function nextSceneNumber(scenes: SceneSummaryOut[]): number {
   if (scenes.length === 0) return 1;
   return Math.max(...scenes.map((s) => s.scene_number)) + 1;
-}
-
-function cn(...parts: (string | false | null | undefined)[]) {
-  return parts.filter(Boolean).join(" ");
-}
-
-function Panel({
-  title,
-  description,
-  children,
-  className,
-  compact,
-}: {
-  title: string;
-  description?: string;
-  children: React.ReactNode;
-  className?: string;
-  compact?: boolean;
-}) {
-  return (
-    <section className={cn("flex flex-col", compact ? "gap-2.5" : "gap-4", className)}>
-      <div>
-        <h2
-          className={cn(
-            "font-semibold text-foreground",
-            compact ? "text-sm" : "text-base",
-          )}
-        >
-          {title}
-        </h2>
-        {description ? (
-          <p
-            className={cn(
-              "text-muted-foreground",
-              compact ? "mt-0.5 text-xs leading-5" : "mt-1 text-sm leading-6",
-            )}
-          >
-            {description}
-          </p>
-        ) : null}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="text-sm font-medium text-foreground">{children}</span>
-  );
-}
-
-function Input({
-  className,
-  ...props
-}: React.InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      className={cn(
-        "flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm text-foreground shadow-sm transition-colors",
-        "placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
-        "disabled:cursor-not-allowed disabled:opacity-50",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function Textarea({
-  className,
-  ...props
-}: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return (
-    <textarea
-      className={cn(
-        "flex min-h-[80px] w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground shadow-sm transition-colors",
-        "placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
-        "disabled:cursor-not-allowed disabled:opacity-50",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function Button({
-  variant = "default",
-  size = "default",
-  className,
-  children,
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "default" | "secondary" | "outline" | "ghost" | "destructive" | "cta";
-  size?: "default" | "sm";
-}) {
-  return (
-    <button
-      type="button"
-      className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-        "disabled:pointer-events-none disabled:opacity-50",
-        size === "sm" ? "h-8 px-3" : "h-9 px-4",
-        variant === "default" &&
-          "bg-primary text-primary-foreground shadow-sm hover:brightness-110",
-        variant === "cta" &&
-          "bg-cta text-cta-foreground shadow-sm hover:brightness-110",
-        variant === "secondary" &&
-          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        variant === "outline" &&
-          "border border-input bg-card hover:bg-accent hover:text-accent-foreground",
-        variant === "ghost" && "hover:bg-accent hover:text-accent-foreground",
-        variant === "destructive" &&
-          "bg-destructive text-destructive-foreground hover:opacity-90",
-        className,
-      )}
-      {...props}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Badge({
-  variant = "default",
-  children,
-}: {
-  variant?:
-    | "default"
-    | "secondary"
-    | "outline"
-    | "destructive"
-    | "warning"
-    | "success";
-  children: React.ReactNode;
-}) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-semibold",
-        variant === "default" &&
-          "border-transparent bg-primary text-primary-foreground",
-        variant === "secondary" &&
-          "border-transparent bg-secondary text-secondary-foreground",
-        variant === "outline" &&
-          "border-border bg-transparent text-foreground",
-        variant === "destructive" &&
-          "border-destructive/30 bg-destructive/10 text-destructive",
-        variant === "warning" &&
-          "border-warning/40 bg-warning/15 text-warning",
-        variant === "success" &&
-          "border-success/30 bg-success/10 text-success",
-      )}
-    >
-      {children}
-    </span>
-  );
-}
-
-function Alert({
-  variant = "destructive",
-  title,
-  children,
-}: {
-  variant?: "destructive";
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      role="alert"
-      className={cn(
-        "rounded-lg border px-4 py-3 text-sm",
-        variant === "destructive" &&
-          "border-destructive/30 bg-destructive/10 text-foreground",
-      )}
-    >
-      <p className="font-semibold text-destructive">{title}</p>
-      <div className="mt-1 text-muted-foreground">{children}</div>
-    </div>
-  );
-}
-
-function Spinner({ className }: { className?: string }) {
-  return (
-    <span
-      className={cn(
-        "inline-block size-4 animate-spin rounded-full border-2 border-current border-t-transparent",
-        className,
-      )}
-      aria-hidden
-    />
-  );
 }
 
 export default function StoryWorkspace() {
@@ -726,13 +542,13 @@ export default function StoryWorkspace() {
   return (
     <div className="workspace-canvas flex min-h-screen flex-col">
       <div className="workspace-content flex min-h-screen flex-col">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-card/80 px-4 backdrop-blur-sm lg:px-6">
+      <header className="glass-panel flex h-14 shrink-0 items-center justify-between border-b border-border/60 px-4 lg:px-6">
         <div className="flex items-center gap-3">
           <div className="brand-mark flex size-8 items-center justify-center rounded-md text-sm font-bold">
             IS
           </div>
           <div>
-            <p className="text-sm font-semibold leading-none text-foreground">
+            <p className="soft-heading text-sm font-semibold leading-none text-foreground">
               inferStories
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
@@ -772,7 +588,7 @@ export default function StoryWorkspace() {
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         {/* Left — stories & scene navigation */}
-        <aside className="flex w-full shrink-0 flex-col border-b border-sidebar-border bg-sidebar/72 text-xs backdrop-blur-md lg:w-80 lg:border-b-0 lg:border-r">
+        <aside className="flex w-full shrink-0 flex-col border-b border-sidebar-border bg-sidebar text-xs shadow-[0_18px_55px_rgba(0,0,0,0.06)] backdrop-blur-xl lg:w-80 lg:border-b-0 lg:border-r">
           <div className="flex-1 space-y-5 overflow-y-auto p-3 lg:p-4">
             <Panel
               compact
@@ -1123,7 +939,7 @@ export default function StoryWorkspace() {
         </aside>
 
         {/* Center — story setup or scene editor */}
-        <main className="min-h-[320px] min-w-0 flex-1 overflow-y-auto bg-background/55 backdrop-blur-[2px]">
+      <main className="min-h-[320px] min-w-0 flex-1 overflow-y-auto bg-background/40">
           <div className="mx-auto max-w-3xl p-4 lg:p-6">
             {centerView === "story-form" ? (
               <Panel
@@ -1265,7 +1081,7 @@ export default function StoryWorkspace() {
                 </div>
                 <form
                   onSubmit={onAddScene}
-                  className="space-y-5 rounded-lg border border-border bg-card p-5 shadow-sm"
+                  className="glass-panel space-y-5 rounded-[var(--radius-card)] p-5"
                 >
                   <div className="grid gap-4 sm:grid-cols-[120px_1fr]">
                     <label className="flex flex-col gap-1.5">
@@ -1290,7 +1106,11 @@ export default function StoryWorkspace() {
                         onChange={(e) => setSceneText(e.target.value)}
                         disabled={sceneDisabled}
                         placeholder="What happens in this scene?"
-                        className="min-h-[140px] leading-relaxed"
+                        className={cn(
+                          "min-h-[160px] leading-relaxed",
+                          "bg-[#0f172a]/92 text-slate-50 placeholder:text-slate-300",
+                          "border-white/10 focus-visible:ring-2 focus-visible:ring-sky-200/30",
+                        )}
                       />
                     </label>
                   </div>
@@ -1413,7 +1233,7 @@ export default function StoryWorkspace() {
         </main>
 
         {/* Right — validation issues */}
-        <aside className="flex w-full shrink-0 flex-col border-t border-border bg-card/72 backdrop-blur-md lg:w-80 lg:border-l-4 lg:border-l-primary/30 lg:border-t-0">
+        <aside className="flex w-full shrink-0 flex-col border-t border-border bg-card/60 shadow-[0_18px_55px_rgba(0,0,0,0.06)] backdrop-blur-xl lg:w-80 lg:border-l lg:border-l-border lg:border-t-0">
           <div className="flex items-center justify-between border-b border-border bg-secondary/40 px-4 py-3">
             <div>
               <h2 className="text-base font-semibold text-secondary-foreground">

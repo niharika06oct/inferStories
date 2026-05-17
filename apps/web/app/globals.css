@@ -1,46 +1,47 @@
 @import "tailwindcss";
 
 /*
- * Design system: Open Design — "Neutral Modern" (default starter)
- * Source: https://github.com/nexu-io/open-design/blob/main/design-systems/default/DESIGN.md
- * Catalog: https://opendesigner.io/quickstart
+ * Visual direction: premium, calm writing space
+ * Watercolor paper + glass panels + softer type hierarchy.
  *
- * Mapped to semantic tokens for Tailwind (FundingPulse / shadcn-style names).
+ * Background images:
+ * - Default overlays: `public/decor/blossom.png` + `public/decor/crocus.png`.
+ * - If you'd like to use the images you attached in chat, save them into
+ *   `apps/web/public/decor/` and update `--watercolor-a/--watercolor-b` below.
  */
 :root {
-  /* Warm manuscript paper + OD neutrals */
-  --background: #f7f4ef;
-  --foreground: #1c1917;
-  --paper: #f7f4ef;
+  /* Paper base (warm, airy) */
+  --background: #fbfaf8;
+  --foreground: #171717;
+  --paper: #fbfaf8;
 
-  /* OD: Surface #FFFFFF */
-  --card: #ffffff;
-  --card-foreground: #111111;
+  /* Glass surfaces */
+  --card: rgba(255, 255, 255, 0.66);
+  --card-foreground: #151515;
 
-  --popover: #ffffff;
-  --popover-foreground: #111111;
+  --popover: rgba(255, 255, 255, 0.82);
+  --popover-foreground: #151515;
 
-  /* OD: Accent cobalt #2F6FEB — primary CTAs, links, focus */
-  --primary: #2f6feb;
+  /* Accent: ink + soft periwinkle */
+  --primary: #3d6ea8;
   --primary-foreground: #ffffff;
 
-  /* Sidebar / secondary panels */
-  --secondary: #f5f5f5;
-  --secondary-foreground: #111111;
+  /* Secondary panels */
+  --secondary: rgba(248, 248, 248, 0.72);
+  --secondary-foreground: #171717;
 
-  /* OD: Muted #6B6B6B */
-  --muted: #f5f5f5;
-  --muted-foreground: #6b6b6b;
+  /* Muted copy */
+  --muted: rgba(246, 246, 246, 0.78);
+  --muted-foreground: rgba(23, 23, 23, 0.62);
 
-  /* Light cobalt wash — hover states */
-  --accent: #ebf2fe;
-  --accent-foreground: #1e4a8a;
+  /* Hover wash */
+  --accent: rgba(146, 181, 232, 0.22);
+  --accent-foreground: #1f3d63;
 
-  /* Same accent family (OD: one accent per screen) */
   --cta: #2f6feb;
   --cta-foreground: #ffffff;
 
-  /* OD: Danger / Success / Warn */
+  /* Status */
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
   --success: #17a34a;
@@ -48,67 +49,73 @@
   --warning: #eab308;
   --warning-foreground: #111111;
 
-  /* OD: Border #E5E5E5 */
-  --border: #e5e5e5;
-  --input: #e5e5e5;
-  --ring: #2f6feb;
+  /* Borders lean "foggy" for glass. */
+  --border: rgba(20, 20, 20, 0.10);
+  --input: rgba(20, 20, 20, 0.12);
+  --ring: rgba(61, 110, 168, 0.38);
 
-  --sidebar: #f5f5f5;
-  --sidebar-foreground: #111111;
-  --sidebar-border: #e5e5e5;
+  --sidebar: rgba(255, 255, 255, 0.42);
+  --sidebar-foreground: #171717;
+  --sidebar-border: rgba(20, 20, 20, 0.08);
 
-  /* Logo: cobalt range (sparing gradient per OD) */
-  --brand-from: #2f6feb;
-  --brand-to: #1d5ed8;
+  /* Brand (gentle gradient) */
+  --brand-from: #6aa7d6;
+  --brand-to: #3d6ea8;
 
-  /* OD: buttons 8px, cards 12px */
-  --radius: 0.5rem;
-  --radius-card: 0.75rem;
+  /* Radii */
+  --radius: 0.625rem;
+  --radius-card: 1.0rem;
+
+  /* Watercolor overlays */
+  --watercolor-a: url("/decor/a02de820-045b-47fc-8eda-5f7135f9fa53.png");
+  --watercolor-b: url("/decor/8a3c5f0d-0d4c-4d6f-aedd-23bc28a050fb.png");
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    /* Dark companion (not in OD spec — keeps cobalt accent) */
-    --background: #111111;
-    --foreground: #fafafa;
+    /* Dark companion: warm + inky, not harsh */
+    --background: #0f1113;
+    --foreground: rgba(255, 255, 255, 0.92);
+    --paper: #0f1113;
 
-    --card: #1a1a1a;
-    --card-foreground: #fafafa;
+    --card: rgba(22, 24, 28, 0.72);
+    --card-foreground: rgba(255, 255, 255, 0.92);
 
-    --popover: #1a1a1a;
-    --popover-foreground: #fafafa;
+    --popover: rgba(22, 24, 28, 0.84);
+    --popover-foreground: rgba(255, 255, 255, 0.92);
 
-    --primary: #5b8def;
-    --primary-foreground: #0f172a;
+    --secondary: rgba(255, 255, 255, 0.06);
+    --secondary-foreground: rgba(255, 255, 255, 0.92);
 
-    --secondary: #1f1f1f;
-    --secondary-foreground: #fafafa;
+    --muted: rgba(255, 255, 255, 0.05);
+    --muted-foreground: rgba(255, 255, 255, 0.62);
 
-    --muted: #262626;
-    --muted-foreground: #a3a3a3;
+    --accent: rgba(110, 168, 221, 0.16);
+    --accent-foreground: rgba(255, 255, 255, 0.92);
 
-    --accent: #1e3a5f;
-    --accent-foreground: #bfdbfe;
+    --primary: #7bb6e6;
+    --primary-foreground: #081018;
 
-    --cta: #5b8def;
-    --cta-foreground: #0f172a;
+    --cta: #7bb6e6;
+    --cta-foreground: #081018;
 
     --destructive: #f87171;
     --destructive-foreground: #111111;
     --success: #4ade80;
+    --success-foreground: #111111;
     --warning: #facc15;
     --warning-foreground: #111111;
 
-    --border: #2e2e2e;
-    --input: #404040;
-    --ring: #5b8def;
+    --border: rgba(255, 255, 255, 0.12);
+    --input: rgba(255, 255, 255, 0.14);
+    --ring: rgba(123, 182, 230, 0.35);
 
-    --sidebar: #161616;
-    --sidebar-foreground: #fafafa;
-    --sidebar-border: #2e2e2e;
+    --sidebar: rgba(22, 24, 28, 0.55);
+    --sidebar-foreground: rgba(255, 255, 255, 0.92);
+    --sidebar-border: rgba(255, 255, 255, 0.10);
 
-    --brand-from: #5b8def;
-    --brand-to: #2f6feb;
+    --brand-from: #7bb6e6;
+    --brand-to: #3d6ea8;
   }
 }
 
@@ -139,7 +146,7 @@
   --color-sidebar-border: var(--sidebar-border);
   --radius-lg: var(--radius-card);
   --radius-md: var(--radius);
-  --radius-sm: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
   --font-sans: var(--font-inter);
   --font-mono: var(--font-jetbrains-mono);
 }
@@ -154,10 +161,14 @@ body {
 .workspace-canvas {
   position: relative;
   min-height: 100vh;
-  background: var(--paper, var(--background));
+  background:
+    radial-gradient(900px 460px at 12% 6%, rgba(255, 170, 195, 0.22), transparent 62%),
+    radial-gradient(760px 520px at 86% 18%, rgba(134, 194, 255, 0.22), transparent 60%),
+    radial-gradient(640px 520px at 72% 90%, rgba(255, 204, 170, 0.16), transparent 58%),
+    var(--paper, var(--background));
 }
 
-/* Botanical line art — fixed so it stays visible while scrolling */
+/* Watercolor overlays — fixed so they stay visible while scrolling. */
 .workspace-canvas::before,
 .workspace-canvas::after {
   content: "";
@@ -167,27 +178,27 @@ body {
   background-repeat: no-repeat;
   background-size: contain;
   background-position: center;
-  filter: sepia(0.4) contrast(1.08);
-  opacity: 0.42;
+  filter: saturate(0.9) contrast(1.02);
+  opacity: 0.34;
 }
 
 .workspace-canvas::before {
-  background-image: url("/decor/blossom.png");
+  background-image: var(--watercolor-a);
   bottom: 0;
   left: 0;
-  width: min(28rem, 52vw);
-  height: min(34rem, 62vh);
+  width: min(32rem, 58vw);
+  height: min(36rem, 66vh);
   background-position: left bottom;
 }
 
 .workspace-canvas::after {
-  background-image: url("/decor/crocus.png");
+  background-image: var(--watercolor-b);
   top: 3.5rem;
   right: 0;
-  width: min(24rem, 44vw);
-  height: min(30rem, 55vh);
+  width: min(28rem, 50vw);
+  height: min(32rem, 58vh);
   background-position: right top;
-  opacity: 0.36;
+  opacity: 0.30;
 }
 
 .workspace-content {
@@ -204,4 +215,18 @@ body {
   );
   color: #fff;
   box-shadow: 0 1px 2px color-mix(in srgb, var(--brand-from) 25%, transparent);
+}
+
+.glass-panel {
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(14px);
+}
+
+.soft-heading {
+  font-family: var(--font-display), var(--font-inter), system-ui, sans-serif;
+  letter-spacing: -0.01em;
 }
