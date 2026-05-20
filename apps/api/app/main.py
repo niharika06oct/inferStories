@@ -1,3 +1,4 @@
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,11 +10,14 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 
+from app.auth import AuthUser, get_current_user
 from app.database import get_db
 from app.models import Claim, Scene, Story, ValidationIssue
 from app.ai_description import generate_story_description
+from app.claim_helpers import claim_to_out
 from app.schemas import (
     ClaimOut,
+    ClaimStatusUpdate,
     SceneCreate,
     SceneDetailOut,
     SceneOut,
@@ -26,7 +30,7 @@ from app.schemas import (
     StoryUpdate,
     ValidationIssueOut,
 )
-from app.validation import validate_scene_claims
+from app.scene_service import save_scene_with_extraction
 
 
 @asynccontextmanager
@@ -37,8 +41,10 @@ async def lifespan(_app: FastAPI):
             "(SKIP_ALEMBIC_ON_STARTUP=1 to skip)...",
             flush=True,
         )
-        _run_alembic_upgrade()
+        # Sync Alembic in a thread so --reload does not wedge the event loop.
+        await asyncio.to_thread(_run_alembic_upgrade)
         print("[startup] Alembic migrations finished.", flush=True)
+    print("[startup] API ready — accepting requests.", flush=True)
     yield
 
 
@@ -76,9 +82,20 @@ app.add_middleware(
 )
 
 
+def _db_target_hint(url: str) -> str:
+    """Safe one-line hint for logs (no password)."""
+    if "@" in url:
+        return url.split("@", 1)[-1]
+    return url[:80]
+
+
 def _run_alembic_upgrade() -> None:
     from alembic import command
     from alembic.config import Config
+
+    from app.database import DATABASE_URL
+
+    print(f"[startup] Database target: {_db_target_hint(DATABASE_URL)}", flush=True)
 
     root = Path(__file__).resolve().parent.parent
     ini_path = root / "alembic.ini"
@@ -91,14 +108,25 @@ def health():
     return {"status": "ok"}
 
 
+def _story_for_user(db: Session, story_id: int, user: AuthUser) -> Story:
+    story = db.get(Story, story_id)
+    if not story or story.owner_user_id != user.user_id:
+        raise HTTPException(status_code=404, detail="Story not found")
+    return story
+
+
 @app.get("/stories", response_model=list[StoryListOut])
-def list_stories(db: Session = Depends(get_db)):
+def list_stories(
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
     rows = (
         db.query(
             Story,
             func.count(Scene.id).label("scene_count"),
         )
         .outerjoin(Scene, Scene.story_id == Story.id)
+        .filter(Story.owner_user_id == user.user_id)
         .group_by(Story.id)
         .order_by(Story.created_at.desc())
         .all()
@@ -116,8 +144,16 @@ def list_stories(db: Session = Depends(get_db)):
 
 
 @app.post("/stories", response_model=StoryOut)
-def create_story(payload: StoryCreate, db: Session = Depends(get_db)):
-    story = Story(title=payload.title, description=payload.description)
+def create_story(
+    payload: StoryCreate,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    story = Story(
+        title=payload.title,
+        description=payload.description,
+        owner_user_id=user.user_id,
+    )
     db.add(story)
     db.commit()
     db.refresh(story)
@@ -125,20 +161,22 @@ def create_story(payload: StoryCreate, db: Session = Depends(get_db)):
 
 
 @app.get("/stories/{story_id}", response_model=StoryOut)
-def get_story(story_id: int, db: Session = Depends(get_db)):
-    story = db.get(Story, story_id)
-    if not story:
-        raise HTTPException(status_code=404, detail="Story not found")
-    return story
+def get_story(
+    story_id: int,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    return _story_for_user(db, story_id, user)
 
 
 @app.patch("/stories/{story_id}", response_model=StoryOut)
 def update_story(
-    story_id: int, payload: StoryUpdate, db: Session = Depends(get_db)
+    story_id: int,
+    payload: StoryUpdate,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
-    story = db.get(Story, story_id)
-    if not story:
-        raise HTTPException(status_code=404, detail="Story not found")
+    story = _story_for_user(db, story_id, user)
     if payload.title is None and payload.description is None:
         raise HTTPException(
             status_code=400, detail="Provide title and/or description to update"
@@ -157,11 +195,11 @@ def update_story(
     response_model=StoryDescriptionOut,
 )
 def generate_story_description_endpoint(
-    story_id: int, db: Session = Depends(get_db)
+    story_id: int,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
-    story = db.get(Story, story_id)
-    if not story:
-        raise HTTPException(status_code=404, detail="Story not found")
+    story = _story_for_user(db, story_id, user)
 
     scenes = (
         db.query(Scene)
@@ -183,10 +221,12 @@ def generate_story_description_endpoint(
 
 
 @app.get("/stories/{story_id}/scenes", response_model=list[SceneSummaryOut])
-def list_scenes(story_id: int, db: Session = Depends(get_db)):
-    story = db.get(Story, story_id)
-    if not story:
-        raise HTTPException(status_code=404, detail="Story not found")
+def list_scenes(
+    story_id: int,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    _story_for_user(db, story_id, user)
 
     rows = (
         db.query(
@@ -213,7 +253,13 @@ def list_scenes(story_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/stories/{story_id}/scenes/{scene_id}", response_model=SceneDetailOut)
-def get_scene(story_id: int, scene_id: int, db: Session = Depends(get_db)):
+def get_scene(
+    story_id: int,
+    scene_id: int,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    _story_for_user(db, story_id, user)
     scene = (
         db.query(Scene)
         .options(joinedload(Scene.claims))
@@ -228,16 +274,7 @@ def get_scene(story_id: int, scene_id: int, db: Session = Depends(get_db)):
         scene_number=scene.scene_number,
         text=scene.text,
         created_at=scene.created_at,
-        claims=[
-            ClaimOut(
-                id=c.id,
-                subject=c.subject,
-                predicate=c.predicate,
-                object=c.claim_object,
-                is_major_plotline=c.is_major_plotline,
-            )
-            for c in scene.claims
-        ],
+        claims=[claim_to_out(c) for c in scene.claims],
     )
 
 
@@ -247,7 +284,9 @@ def update_scene(
     scene_id: int,
     payload: SceneUpdate,
     db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    _story_for_user(db, story_id, user)
     scene = (
         db.query(Scene)
         .filter(Scene.id == scene_id, Scene.story_id == story_id)
@@ -259,24 +298,6 @@ def update_scene(
     scene.scene_number = payload.scene_number
     scene.text = payload.text
 
-    db.query(ValidationIssue).filter(ValidationIssue.scene_id == scene.id).delete(
-        synchronize_session=False
-    )
-    db.query(Claim).filter(Claim.scene_id == scene.id).delete(synchronize_session=False)
-
-    new_claims: list[Claim] = []
-    for c in payload.claims:
-        claim = Claim(
-            story_id=story_id,
-            scene_id=scene.id,
-            subject=c.subject,
-            predicate=c.predicate,
-            claim_object=c.object,
-            is_major_plotline=c.is_major_plotline,
-        )
-        db.add(claim)
-        new_claims.append(claim)
-
     try:
         db.flush()
     except IntegrityError:
@@ -286,7 +307,9 @@ def update_scene(
             detail="Scene number already exists for this story",
         ) from None
 
-    validate_scene_claims(db, scene, new_claims)
+    _, extraction = save_scene_with_extraction(
+        db, scene, payload.claims, run_extraction=True
+    )
     try:
         db.commit()
     except IntegrityError:
@@ -296,14 +319,23 @@ def update_scene(
             detail="Constraint violation while saving scene or claims",
         ) from None
     db.refresh(scene)
-    return scene
+    return SceneOut(
+        id=scene.id,
+        story_id=scene.story_id,
+        scene_number=scene.scene_number,
+        text=scene.text,
+        extraction=extraction,
+    )
 
 
 @app.post("/stories/{story_id}/scenes", response_model=SceneOut)
-def add_scene(story_id: int, payload: SceneCreate, db: Session = Depends(get_db)):
-    story = db.get(Story, story_id)
-    if not story:
-        raise HTTPException(status_code=404, detail="Story not found")
+def add_scene(
+    story_id: int,
+    payload: SceneCreate,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    _story_for_user(db, story_id, user)
 
     scene = Scene(
         story_id=story_id,
@@ -320,21 +352,9 @@ def add_scene(story_id: int, payload: SceneCreate, db: Session = Depends(get_db)
             detail="Scene number already exists for this story",
         ) from None
 
-    new_claims: list[Claim] = []
-    for c in payload.claims:
-        claim = Claim(
-            story_id=story_id,
-            scene_id=scene.id,
-            subject=c.subject,
-            predicate=c.predicate,
-            claim_object=c.object,
-            is_major_plotline=c.is_major_plotline,
-        )
-        db.add(claim)
-        new_claims.append(claim)
-
-    db.flush()
-    validate_scene_claims(db, scene, new_claims)
+    _, extraction = save_scene_with_extraction(
+        db, scene, payload.claims, run_extraction=True
+    )
     try:
         db.commit()
     except IntegrityError:
@@ -344,14 +364,70 @@ def add_scene(story_id: int, payload: SceneCreate, db: Session = Depends(get_db)
             detail="Constraint violation while saving scene or claims",
         ) from None
     db.refresh(scene)
-    return scene
+    return SceneOut(
+        id=scene.id,
+        story_id=scene.story_id,
+        scene_number=scene.scene_number,
+        text=scene.text,
+        extraction=extraction,
+    )
+
+
+@app.patch(
+    "/stories/{story_id}/scenes/{scene_id}/claims/{claim_id}",
+    response_model=ClaimOut,
+)
+def update_claim_status(
+    story_id: int,
+    scene_id: int,
+    claim_id: int,
+    payload: ClaimStatusUpdate,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    _story_for_user(db, story_id, user)
+    claim = (
+        db.query(Claim)
+        .filter(
+            Claim.id == claim_id,
+            Claim.scene_id == scene_id,
+            Claim.story_id == story_id,
+        )
+        .first()
+    )
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    claim.status = payload.status
+    if payload.claim_text is not None:
+        claim.claim_text = payload.claim_text.strip()
+    if payload.subject is not None:
+        claim.subject = payload.subject.strip()
+    if payload.target is not None:
+        claim.claim_object = payload.target.strip()
+
+    scene = db.get(Scene, scene_id)
+    if scene:
+        db.query(ValidationIssue).filter(ValidationIssue.scene_id == scene.id).delete(
+            synchronize_session=False
+        )
+        scene_claims = db.query(Claim).filter(Claim.scene_id == scene.id).all()
+        from app.validation import validate_scene_claims
+
+        validate_scene_claims(db, scene, scene_claims)
+
+    db.commit()
+    db.refresh(claim)
+    return claim_to_out(claim)
 
 
 @app.post("/stories/{story_id}/validate", response_model=list[ValidationIssueOut])
-def validate_story(story_id: int, db: Session = Depends(get_db)):
-    story = db.get(Story, story_id)
-    if not story:
-        raise HTTPException(status_code=404, detail="Story not found")
+def validate_story(
+    story_id: int,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    _story_for_user(db, story_id, user)
 
     rows = (
         db.query(ValidationIssue)

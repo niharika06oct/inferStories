@@ -9,7 +9,8 @@ _env_file = Path(__file__).resolve().parent.parent / ".env"
 if _env_file.is_file():
     from dotenv import load_dotenv
 
-    load_dotenv(_env_file)
+    # Prefer apps/api/.env over inherited shell vars (e.g. auth-service DATABASE_URL).
+    load_dotenv(_env_file, override=True)
 
 DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
 if not DATABASE_URL:
@@ -19,7 +20,14 @@ if not DATABASE_URL:
         "and password (see scripts/reset_local_postgres.sql).",
     )
 
-engine = create_engine(DATABASE_URL, echo=False)
+_connect_args: dict = {}
+if DATABASE_URL.startswith("postgresql"):
+    _connect_args["connect_timeout"] = int(os.getenv("DB_CONNECT_TIMEOUT", "10"))
+
+_engine_kw: dict = {"echo": False}
+if _connect_args:
+    _engine_kw["connect_args"] = _connect_args
+engine = create_engine(DATABASE_URL, **_engine_kw)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

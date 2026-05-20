@@ -16,6 +16,8 @@ from app.main import app
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SKIP_ALEMBIC_ON_STARTUP", "1")
+    monkeypatch.setenv("AUTH_DISABLED", "1")
+    monkeypatch.setenv("AUTH_DEV_USER_ID", "test-user")
 
     engine = create_engine(
         "sqlite://",

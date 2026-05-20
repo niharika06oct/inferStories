@@ -1,5 +1,5 @@
-import StoryWorkspace from "./StoryWorkspace";
+import MarketingLanding from "../components/marketing/MarketingLanding";
 
 export default function Home() {
-  return <StoryWorkspace />;
+  return <MarketingLanding />;
 }

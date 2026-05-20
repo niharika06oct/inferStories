@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -14,18 +15,17 @@ import {
 } from "../components/ui";
 import {
   addScene,
-  createStory,
   fetchScene,
   fetchScenes,
-  fetchStories,
   fetchStory,
   fetchValidationIssues,
   generateStoryDescription,
+  updateClaimStatus,
   updateScene,
   updateStory,
-  type ClaimIn,
+  type ClaimOut,
+  type SceneExtractionOut,
   type SceneSummaryOut,
-  type StoryListOut,
   type ValidationIssueOut,
 } from "../lib/api";
 import {
@@ -37,13 +37,11 @@ import {
   isSupportedManuscriptFile,
   readManuscriptFile,
 } from "../lib/readManuscriptFile";
-
-const emptyClaim = (): ClaimIn => ({
-  subject: "",
-  predicate: "",
-  object: "",
-  is_major_plotline: false,
-});
+import { useWorkspaceLayout } from "../lib/useWorkspaceLayout";
+import { DetectedStoryMemory } from "../components/DetectedStoryMemory";
+import { PanelEdgeCollapse } from "../components/PanelEdgeCollapse";
+import { PanelResizeHandle } from "../components/PanelResizeHandle";
+import { UserAccountMenuGate } from "../components/UserAccountMenu";
 
 function formatErr(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -62,22 +60,27 @@ function nextSceneNumber(scenes: SceneSummaryOut[]): number {
   return Math.max(...scenes.map((s) => s.scene_number)) + 1;
 }
 
-export default function StoryWorkspace() {
-  const [stories, setStories] = useState<StoryListOut[]>([]);
-  const [storiesLoading, setStoriesLoading] = useState(true);
+type StoryEditorProps = {
+  storyId: number;
+};
+
+export default function StoryEditor({ storyId }: StoryEditorProps) {
   const [scenes, setScenes] = useState<SceneSummaryOut[]>([]);
   const [scenesLoading, setScenesLoading] = useState(false);
-  type CenterView = "empty" | "story-form" | "scenes";
-  const [centerView, setCenterView] = useState<CenterView>("empty");
+  type CenterView = "story-form" | "scenes";
+  const [centerView, setCenterView] = useState<CenterView>("scenes");
+  const [storyLoading, setStoryLoading] = useState(true);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [storyId, setStoryId] = useState<number | null>(null);
 
   const [editingSceneId, setEditingSceneId] = useState<number | null>(null);
   const [sceneNumber, setSceneNumber] = useState(1);
   const [sceneText, setSceneText] = useState("");
-  const [claims, setClaims] = useState<ClaimIn[]>([emptyClaim()]);
+  const [claims, setClaims] = useState<ClaimOut[]>([]);
+  const [lastExtraction, setLastExtraction] = useState<SceneExtractionOut | null>(
+    null,
+  );
 
   const [issues, setIssues] = useState<ValidationIssueOut[]>([]);
   const [issuesLoadedAt, setIssuesLoadedAt] = useState<string | null>(null);
@@ -89,34 +92,27 @@ export default function StoryWorkspace() {
     fileName: string;
     manuscript: ImportedManuscript;
   } | null>(null);
-  const [importStoryTitle, setImportStoryTitle] = useState("");
-  const [importTarget, setImportTarget] = useState<"new" | "existing">("new");
-  const [importExistingStoryId, setImportExistingStoryId] = useState<
-    number | null
-  >(null);
   const [importSceneTitles, setImportSceneTitles] = useState<string[]>([]);
-  const [importStoryDescription, setImportStoryDescription] = useState("");
   const [generatingDescription, setGeneratingDescription] = useState(false);
   const errorBoxRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const loadStories = useCallback(async () => {
-    setStoriesLoading(true);
-    try {
-      const data = await fetchStories();
-      setStories(data);
-    } catch (e) {
-      setError(formatErr(e));
-    } finally {
-      setStoriesLoading(false);
-    }
-  }, []);
+  const workspace = useWorkspaceLayout();
+  const {
+    leftOpen,
+    rightOpen,
+    leftWidth,
+    rightWidth,
+    sceneEditorHeight,
+    isWritingFocus,
+    setLeftOpen,
+    setRightOpen,
+    resizeLeft,
+    resizeRight,
+    enterWritingFocus,
+    exitWritingFocus,
+  } = workspace;
 
   const loadScenes = useCallback(async () => {
-    if (storyId == null) {
-      setScenes([]);
-      return;
-    }
     setScenesLoading(true);
     try {
       const data = await fetchScenes(storyId);
@@ -134,35 +130,12 @@ export default function StoryWorkspace() {
     setEditingSceneId(null);
     setSceneNumber(nextSceneNumber(sceneList));
     setSceneText("");
-    setClaims([emptyClaim()]);
+    setClaims([]);
+    setLastExtraction(null);
   }, []);
-
-  const openStory = useCallback(
-    async (id: number) => {
-      setBusy(true);
-      setError(null);
-      try {
-        const s = await fetchStory(id);
-        setStoryId(s.id);
-        setTitle(s.title);
-        setDescription(s.description ?? "");
-        setEditingSceneId(null);
-        setCenterView("scenes");
-        const sceneList = await fetchScenes(id);
-        setScenes(sceneList);
-        resetSceneEditor(sceneList);
-      } catch (err) {
-        setError(formatErr(err));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [resetSceneEditor],
-  );
 
   const openScene = useCallback(
     async (sceneId: number) => {
-      if (storyId == null) return;
       setBusy(true);
       setError(null);
       try {
@@ -170,16 +143,8 @@ export default function StoryWorkspace() {
         setEditingSceneId(scene.id);
         setSceneNumber(scene.scene_number);
         setSceneText(scene.text);
-        setClaims(
-          scene.claims.length > 0
-            ? scene.claims.map((c) => ({
-                subject: c.subject,
-                predicate: c.predicate,
-                object: c.object,
-                is_major_plotline: c.is_major_plotline,
-              }))
-            : [emptyClaim()],
-        );
+        setClaims(scene.claims);
+        setLastExtraction(null);
       } catch (err) {
         setError(formatErr(err));
       } finally {
@@ -190,16 +155,38 @@ export default function StoryWorkspace() {
   );
 
   useEffect(() => {
-    void loadStories();
-  }, [loadStories]);
+    let cancelled = false;
+    async function loadStory() {
+      setStoryLoading(true);
+      setError(null);
+      try {
+        const s = await fetchStory(storyId);
+        if (cancelled) return;
+        setTitle(s.title);
+        setDescription(s.description ?? "");
+        setCenterView("scenes");
+        const sceneList = await fetchScenes(storyId);
+        if (cancelled) return;
+        setScenes(sceneList);
+        resetSceneEditor(sceneList);
+      } catch (err) {
+        if (!cancelled) setError(formatErr(err));
+      } finally {
+        if (!cancelled) setStoryLoading(false);
+      }
+    }
+    void loadStory();
+    return () => {
+      cancelled = true;
+    };
+  }, [storyId, resetSceneEditor]);
 
   useEffect(() => {
-    if (storyId == null) return;
+    if (storyLoading) return;
     void loadScenes();
-  }, [storyId, loadScenes]);
+  }, [storyId, loadScenes, storyLoading]);
 
   const loadIssues = useCallback(async () => {
-    if (storyId == null) return;
     setIssuesLoading(true);
     setError(null);
     try {
@@ -214,14 +201,14 @@ export default function StoryWorkspace() {
   }, [storyId]);
 
   useEffect(() => {
-    if (storyId == null) return;
+    if (storyLoading) return;
     const kickoff = window.setTimeout(() => void loadIssues(), 0);
     const id = window.setInterval(() => void loadIssues(), 4000);
     return () => {
       window.clearTimeout(kickoff);
       window.clearInterval(id);
     };
-  }, [storyId, loadIssues]);
+  }, [storyId, loadIssues, storyLoading]);
 
   useEffect(() => {
     if (error && errorBoxRef.current) {
@@ -229,45 +216,9 @@ export default function StoryWorkspace() {
     }
   }, [error]);
 
-  async function onCreateStory(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const s = await createStory({
-        title: title.trim(),
-        description: description.trim() || undefined,
-      });
-      setStoryId(s.id);
-      setCenterView("scenes");
-      await loadStories();
-      const sceneList = await fetchScenes(s.id);
-      setScenes(sceneList);
-      resetSceneEditor(sceneList);
-    } catch (err) {
-      setError(formatErr(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function startNewStory() {
-    setStoryId(null);
-    setTitle("");
-    setDescription("");
-    setScenes([]);
-    setEditingSceneId(null);
-    setCenterView("story-form");
-    cancelImport();
-  }
-
   function cancelImport() {
     setImportDraft(null);
     setImportSceneTitles([]);
-    setImportStoryTitle("");
-    setImportStoryDescription("");
-    setImportTarget("new");
-    setImportExistingStoryId(null);
   }
 
   async function maybeGenerateDescription(
@@ -286,7 +237,6 @@ export default function StoryWorkspace() {
 
   async function onSaveStoryDetails(e: React.FormEvent) {
     e.preventDefault();
-    if (storyId == null) return;
     const nextTitle = title.trim();
     if (!nextTitle) {
       setError("Story name cannot be empty.");
@@ -301,7 +251,6 @@ export default function StoryWorkspace() {
       });
       setTitle(updated.title);
       setDescription(updated.description ?? "");
-      await loadStories();
       setImportStatus("Story details saved.");
       setCenterView("scenes");
     } catch (err) {
@@ -312,14 +261,12 @@ export default function StoryWorkspace() {
   }
 
   async function onGenerateDescriptionClick() {
-    if (storyId == null) return;
     setGeneratingDescription(true);
     setError(null);
     try {
       const result = await generateStoryDescription(storyId);
       setDescription(result.description);
       await updateStory(storyId, { description: result.description });
-      await loadStories();
       const via =
         result.source === "openai"
           ? "AI"
@@ -353,17 +300,9 @@ export default function StoryWorkspace() {
       }
       const manuscript = parseManuscriptText(file.name, raw);
       setImportDraft({ fileName: file.name, manuscript });
-      setImportStoryTitle(manuscript.title);
       setImportSceneTitles(
         manuscript.scenes.map((s) => s.title ?? ""),
       );
-      if (storyId != null) {
-        setImportTarget("existing");
-        setImportExistingStoryId(storyId);
-      } else {
-        setImportTarget("new");
-        setImportExistingStoryId(null);
-      }
     } catch (err) {
       setError(formatErr(err));
     } finally {
@@ -375,43 +314,16 @@ export default function StoryWorkspace() {
     e.preventDefault();
     if (!importDraft) return;
 
-    const storyTitle = importStoryTitle.trim();
-    if (importTarget === "new" && !storyTitle) {
-      setError("Enter a story name for the import.");
-      return;
-    }
-    if (importTarget === "existing" && importExistingStoryId == null) {
-      setError("Choose which story to add scenes to.");
-      return;
-    }
-
     setBusy(true);
     setError(null);
     try {
-      let targetId: number;
-      if (importTarget === "new") {
-        const desc =
-          importStoryDescription.trim() ||
-          undefined;
-        const story = await createStory({
-          title: storyTitle,
-          description: desc,
-        });
-        targetId = story.id;
-      } else {
-        targetId = importExistingStoryId!;
-      }
-
-      const existingScenes =
-        importTarget === "existing"
-          ? await fetchScenes(targetId)
-          : [];
+      const existingScenes = await fetchScenes(storyId);
       let sceneNum = nextSceneNumber(existingScenes);
 
       for (let i = 0; i < importDraft.manuscript.scenes.length; i++) {
         const scene = importDraft.manuscript.scenes[i];
         const label = importSceneTitles[i]?.trim() || scene.title;
-        await addScene(targetId, {
+        await addScene(storyId, {
           scene_number: sceneNum,
           text: formatSceneText(label, scene.text),
           claims: [],
@@ -419,24 +331,20 @@ export default function StoryWorkspace() {
         sceneNum += 1;
       }
 
-      await loadStories();
-      await openStory(targetId);
+      const sceneList = (await loadScenes()) ?? [];
+      resetSceneEditor(sceneList);
 
-      const meta = await fetchStory(targetId);
+      const meta = await fetchStory(storyId);
       const aiSource = meta.description?.trim()
         ? null
-        : await maybeGenerateDescription(targetId, false);
+        : await maybeGenerateDescription(storyId, false);
 
-      const dest =
-        importTarget === "new"
-          ? `new story “${storyTitle}”`
-          : `existing story`;
-      let status = `Imported ${importDraft.manuscript.scenes.length} scene${importDraft.manuscript.scenes.length === 1 ? "" : "s"} into ${dest}. Add claims in the editor.`;
+      let status = `Imported ${importDraft.manuscript.scenes.length} chapter${importDraft.manuscript.scenes.length === 1 ? "" : "s"} into this story.`;
       if (aiSource) {
         status +=
           aiSource === "openai"
-            ? " AI wrote the story description from your scenes."
-            : " A short description was drafted from your scenes (set OPENAI_API_KEY for full AI).";
+            ? " AI wrote the story description from your chapters."
+            : " A short description was drafted from your chapters (set OPENAI_API_KEY for full AI).";
       }
       setImportStatus(status);
       cancelImport();
@@ -448,7 +356,6 @@ export default function StoryWorkspace() {
   }
 
   async function onExportStory() {
-    if (storyId == null) return;
     setBusy(true);
     setError(null);
     try {
@@ -459,7 +366,7 @@ export default function StoryWorkspace() {
       }
       for (const sc of sceneList) {
         const full = await fetchScene(storyId, sc.id);
-        lines.push(`## Scene ${full.scene_number}`, "", full.text, "");
+        lines.push(`## Chapter ${full.scene_number}`, "", full.text, "");
         if (full.claims.length > 0) {
           lines.push("### Claims", "");
           for (const c of full.claims) {
@@ -487,23 +394,42 @@ export default function StoryWorkspace() {
     }
   }
 
-  function updateClaim(i: number, patch: Partial<ClaimIn>) {
-    setClaims((prev) =>
-      prev.map((c, j) => (j === i ? { ...c, ...patch } : c)),
-    );
+  async function onClaimApprove(claimId: number) {
+    if (editingSceneId == null) return;
+    setBusy(true);
+    try {
+      await updateClaimStatus(storyId, editingSceneId, claimId, {
+        status: "approved",
+      });
+      await openScene(editingSceneId);
+      await loadIssues();
+    } catch (err) {
+      setError(formatErr(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onClaimReject(claimId: number) {
+    if (editingSceneId == null) return;
+    setBusy(true);
+    try {
+      await updateClaimStatus(storyId, editingSceneId, claimId, {
+        status: "rejected",
+      });
+      await openScene(editingSceneId);
+      await loadIssues();
+    } catch (err) {
+      setError(formatErr(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function onAddScene(e: React.FormEvent) {
     e.preventDefault();
-    if (storyId == null) return;
-    const trimmed = claims.map((c) => ({
-      ...c,
-      subject: c.subject.trim(),
-      predicate: c.predicate.trim(),
-      object: c.object.trim(),
-    }));
-    if (trimmed.some((c) => !c.subject || !c.predicate || !c.object)) {
-      setError("Each claim needs subject, predicate, and object.");
+    if (!sceneText.trim()) {
+      setError("Chapter text is required.");
       return;
     }
     setBusy(true);
@@ -512,21 +438,26 @@ export default function StoryWorkspace() {
       const body = {
         scene_number: sceneNumber,
         text: sceneText.trim(),
-        claims: trimmed,
+        claims: [] as { subject: string; predicate: string; object: string; is_major_plotline: boolean }[],
       };
+      let savedId = editingSceneId;
+      let extraction: SceneExtractionOut | null = null;
       if (editingSceneId != null) {
-        await updateScene(storyId, editingSceneId, body);
+        const res = await updateScene(storyId, editingSceneId, body);
+        extraction = res.extraction ?? null;
       } else {
-        await addScene(storyId, body);
+        const res = await addScene(storyId, body);
+        savedId = res.id;
+        extraction = res.extraction ?? null;
       }
+      setLastExtraction(extraction);
       const sceneList = (await loadScenes()) ?? [];
-      if (editingSceneId != null) {
-        await openScene(editingSceneId);
+      if (savedId != null) {
+        await openScene(savedId);
       } else {
         resetSceneEditor(sceneList);
       }
       await loadIssues();
-      await loadStories();
     } catch (err) {
       setError(formatErr(err));
     } finally {
@@ -534,34 +465,61 @@ export default function StoryWorkspace() {
     }
   }
 
-  const sceneDisabled = storyId == null || busy || centerView !== "scenes";
+  const sceneDisabled = busy || centerView !== "scenes" || storyLoading;
   const isEditingScene = editingSceneId != null;
-  const isCreatingStory = centerView === "story-form" && storyId == null;
-  const isEditingStory = centerView === "story-form" && storyId != null;
+
+  const sceneTextareaClass = cn(
+    "w-full resize-y text-[15px] leading-7",
+    "bg-[#0f172a]/92 text-slate-50 placeholder:text-slate-300",
+    "border-white/10 focus-visible:ring-2 focus-visible:ring-sky-200/30",
+    sceneEditorHeight === "default" && "scene-textarea--default",
+    sceneEditorHeight === "large" && "scene-textarea--large",
+    sceneEditorHeight === "focus" && "scene-textarea--focus",
+  );
 
   return (
     <div className="workspace-canvas flex min-h-screen flex-col">
       <div className="workspace-content flex min-h-screen flex-col">
       <header className="glass-panel flex h-14 shrink-0 items-center justify-between border-b border-border/60 px-4 lg:px-6">
-        <div className="flex items-center gap-3">
-          <div className="brand-mark flex size-8 items-center justify-center rounded-md text-sm font-bold">
-            IS
-          </div>
-          <div>
-            <p className="soft-heading text-sm font-semibold leading-none text-foreground">
-              inferStories
+        <div className="flex min-w-0 items-center gap-3">
+          <Link
+            href="/"
+            className="shrink-0 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            ← Library
+          </Link>
+          <div className="hidden h-4 w-px shrink-0 bg-border sm:block" aria-hidden />
+          <div className="min-w-0">
+            <p className="soft-heading truncate text-sm font-semibold leading-none text-foreground">
+              {title || "Loading…"}
             </p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Continuity memory for fiction
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              Chapters & continuity
             </p>
           </div>
         </div>
-        {storyId != null ? (
-          <Badge variant="default">Story #{storyId}</Badge>
-        ) : (
-          <Badge variant="outline">No story loaded</Badge>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          <Badge variant="default">#{storyId}</Badge>
+          <UserAccountMenuGate />
+        </div>
       </header>
+
+      <div
+        className="glass-panel flex shrink-0 items-center justify-end border-b border-border/60 px-3 py-2 lg:px-6"
+        role="toolbar"
+        aria-label="Writing focus"
+      >
+        <Button
+          type="button"
+          variant={isWritingFocus ? "cta" : "outline"}
+          size="sm"
+          onClick={() =>
+            isWritingFocus ? exitWritingFocus() : enterWritingFocus()
+          }
+        >
+          {isWritingFocus ? "Exit focus mode" : "Focus on writing"}
+        </Button>
+      </div>
 
       {error ? (
         <div ref={errorBoxRef} className="shrink-0 border-b border-border px-4 py-3 lg:px-6">
@@ -586,14 +544,43 @@ export default function StoryWorkspace() {
         </div>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        {/* Left — stories & scene navigation */}
-        <aside className="flex w-full shrink-0 flex-col border-b border-sidebar-border bg-sidebar text-xs shadow-[0_18px_55px_rgba(0,0,0,0.06)] backdrop-blur-xl lg:w-80 lg:border-b-0 lg:border-r">
+      <div className="relative flex min-h-0 flex-1 flex-col lg:flex-row">
+        {!leftOpen ? (
+          <button
+            type="button"
+            className="workspace-edge-tab workspace-edge-tab--left"
+            onClick={() => setLeftOpen(true)}
+            aria-label="Show chapters panel"
+          >
+            &gt;
+          </button>
+        ) : null}
+        {!rightOpen ? (
+          <button
+            type="button"
+            className="workspace-edge-tab workspace-edge-tab--right"
+            onClick={() => setRightOpen(true)}
+            aria-label="Show continuity panel"
+          >
+            &lt;
+          </button>
+        ) : null}
+        {leftOpen ? (
+          <div className="workspace-panel-shell">
+            <aside
+              className="workspace-side-panel flex flex-col overflow-hidden border-b border-sidebar-border bg-sidebar/50 text-xs shadow-[0_18px_55px_rgba(0,0,0,0.06)] backdrop-blur-xl lg:border-b-0 lg:border-r"
+              style={{ ["--panel-w" as string]: `${leftWidth}px` }}
+            >
+              <div className="shrink-0 border-b border-sidebar-border bg-sidebar/80 px-3 py-2">
+                <span className="text-xs font-semibold text-foreground">
+                  Chapters & import
+                </span>
+              </div>
           <div className="flex-1 space-y-5 overflow-y-auto p-3 lg:p-4">
             <Panel
               compact
-              title="Your stories"
-              description="Open a story, import a file, or start fresh."
+              title="Import manuscript"
+              description="Add chapters from a file on this device into this story."
             >
               <input
                 ref={fileInputRef}
@@ -613,98 +600,13 @@ export default function StoryWorkspace() {
                     </p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       {importDraft.fileName} ·{" "}
-                      {importDraft.manuscript.scenes.length} scene
+                      {importDraft.manuscript.scenes.length} chapter
                       {importDraft.manuscript.scenes.length === 1 ? "" : "s"}
                     </p>
                   </div>
 
-                  <fieldset className="space-y-2">
-                    <legend className="text-sm font-medium text-foreground">
-                      Add to
-                    </legend>
-                    <label className="flex cursor-pointer items-center gap-2 text-sm">
-                      <input
-                        type="radio"
-                        name="importTarget"
-                        className="accent-primary"
-                        checked={importTarget === "new"}
-                        onChange={() => {
-                          setImportTarget("new");
-                          setImportExistingStoryId(null);
-                        }}
-                        disabled={busy}
-                      />
-                      <span>New story</span>
-                    </label>
-                    <label className="flex cursor-pointer items-center gap-2 text-sm">
-                      <input
-                        type="radio"
-                        name="importTarget"
-                        className="accent-primary"
-                        checked={importTarget === "existing"}
-                        onChange={() => {
-                          setImportTarget("existing");
-                          if (importExistingStoryId == null && stories.length > 0) {
-                            setImportExistingStoryId(stories[0].id);
-                          }
-                        }}
-                        disabled={busy || stories.length === 0}
-                      />
-                      <span>Existing story</span>
-                    </label>
-                  </fieldset>
-
-                  {importTarget === "new" ? (
-                    <>
-                      <label className="flex flex-col gap-1.5">
-                        <FieldLabel>Story name</FieldLabel>
-                        <Input
-                          required
-                          value={importStoryTitle}
-                          onChange={(e) => setImportStoryTitle(e.target.value)}
-                          disabled={busy}
-                          placeholder="Name for this manuscript"
-                        />
-                      </label>
-                      <label className="flex flex-col gap-1.5">
-                        <FieldLabel>Description (optional)</FieldLabel>
-                        <Textarea
-                          value={importStoryDescription}
-                          onChange={(e) =>
-                            setImportStoryDescription(e.target.value)
-                          }
-                          disabled={busy}
-                          placeholder="Leave blank to auto-generate from scenes after import"
-                          className="min-h-[64px]"
-                        />
-                      </label>
-                    </>
-                  ) : (
-                    <label className="flex flex-col gap-1.5">
-                      <FieldLabel>Choose story</FieldLabel>
-                      <select
-                        required
-                        value={importExistingStoryId ?? ""}
-                        onChange={(e) =>
-                          setImportExistingStoryId(Number(e.target.value))
-                        }
-                        disabled={busy}
-                        className="flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-                      >
-                        <option value="" disabled>
-                          Select a story…
-                        </option>
-                        {stories.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.title} ({s.scene_count} scenes)
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-
                   <div className="space-y-2">
-                    <FieldLabel>Chapter / scene names</FieldLabel>
+                    <FieldLabel>Chapter names</FieldLabel>
                     <ul className="max-h-48 space-y-2 overflow-y-auto">
                       {importDraft.manuscript.scenes.map((sc, i) => (
                         <li
@@ -712,7 +614,7 @@ export default function StoryWorkspace() {
                           className="rounded-md border border-border bg-muted/20 p-2"
                         >
                           <span className="text-xs font-medium text-muted-foreground">
-                            Scene {sc.scene_number}
+                            Chapter {sc.scene_number}
                           </span>
                           <Input
                             value={importSceneTitles[i] ?? ""}
@@ -742,7 +644,7 @@ export default function StoryWorkspace() {
                           <Spinner /> Importing…
                         </>
                       ) : (
-                        "Import scenes"
+                        "Import chapters"
                       )}
                     </Button>
                     <Button
@@ -774,24 +676,6 @@ export default function StoryWorkspace() {
                       "Import from this device"
                     )}
                   </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    onClick={() => {
-                      if (centerView === "story-form" && storyId == null) {
-                        setCenterView("empty");
-                      } else {
-                        startNewStory();
-                      }
-                    }}
-                    disabled={busy}
-                  >
-                    {centerView === "story-form" && storyId == null
-                      ? "Cancel"
-                      : "+ New story"}
-                  </Button>
                 </div>
               )}
 
@@ -799,7 +683,7 @@ export default function StoryWorkspace() {
                 <span className="font-medium text-foreground">
                   .docx, .txt, or .md
                 </span>{" "}
-                from your computer. Word headings become scene breaks; or use{" "}
+                from your computer. Word headings become chapter breaks; or use{" "}
                 <code className="rounded bg-muted px-1 font-mono text-[10px]">
                   ---
                 </code>
@@ -836,45 +720,12 @@ export default function StoryWorkspace() {
                 </p>
               </details>
 
-              {storiesLoading ? (
-                <p className="text-xs text-muted-foreground">Loading stories…</p>
-              ) : stories.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  No stories yet. Click &ldquo;New story&rdquo; to begin.
-                </p>
-              ) : (
-                <ul className="space-y-1">
-                  {stories.map((s) => (
-                    <li key={s.id}>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void openStory(s.id)}
-                        className={cn(
-                          "w-full rounded-md border px-2.5 py-2 text-left transition-colors",
-                          storyId === s.id
-                            ? "border-primary/40 bg-primary/10 shadow-sm"
-                            : "border-transparent bg-card hover:border-sidebar-border",
-                        )}
-                      >
-                        <p className="text-xs font-semibold leading-snug text-foreground">
-                          {s.title}
-                        </p>
-                        <p className="mt-0.5 text-[11px] text-muted-foreground">
-                          {s.scene_count} scene{s.scene_count === 1 ? "" : "s"}
-                        </p>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
             </Panel>
 
-            {storyId != null ? (
-              <Panel
+            <Panel
                 compact
-                title="Scenes & chapters"
-                description="Select a scene to edit, or write a new one."
+                title="Chapters"
+                description="Select a chapter to edit, or write a new one."
               >
                 <Button
                   type="button"
@@ -884,13 +735,13 @@ export default function StoryWorkspace() {
                   disabled={busy}
                   onClick={() => resetSceneEditor(scenes)}
                 >
-                  + Write new scene
+                  + Write new chapter
                 </Button>
                 {scenesLoading ? (
-                  <p className="text-sm text-muted-foreground">Loading scenes…</p>
+                  <p className="text-sm text-muted-foreground">Loading chapters…</p>
                 ) : scenes.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    No scenes yet — add your first in the editor.
+                    No chapters yet — add your first in the editor.
                   </p>
                 ) : (
                   <ul className="space-y-1.5">
@@ -909,7 +760,7 @@ export default function StoryWorkspace() {
                         >
                           <div className="flex items-center justify-between gap-2">
                             <span className="text-xs font-semibold text-foreground">
-                              Scene {sc.scene_number}
+                              Chapter {sc.scene_number}
                             </span>
                             <span className="shrink-0">
                               <Badge variant="secondary">{sc.claim_count}</Badge>
@@ -934,28 +785,41 @@ export default function StoryWorkspace() {
                   Download to this device (.md)
                 </Button>
               </Panel>
-            ) : null}
           </div>
-        </aside>
+            </aside>
+            <PanelEdgeCollapse
+              edge="left"
+              label="chapters"
+              onCollapse={() => setLeftOpen(false)}
+            />
+            <PanelResizeHandle side="left" onResize={resizeLeft} />
+          </div>
+        ) : null}
 
         {/* Center — story setup or scene editor */}
-      <main className="min-h-[320px] min-w-0 flex-1 overflow-y-auto bg-background/40">
-          <div className="mx-auto max-w-3xl p-4 lg:p-6">
-            {centerView === "story-form" ? (
+        <main
+          className={cn(
+            "flex min-h-[320px] min-w-0 flex-1 flex-col overflow-y-auto bg-transparent",
+            isWritingFocus && "lg:px-2",
+          )}
+        >
+          <div
+            className={cn(
+              "mx-auto w-full p-4 lg:p-6",
+              isWritingFocus ? "max-w-none flex-1" : "max-w-3xl",
+            )}
+          >
+            {storyLoading ? (
+              <p className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+                <Spinner /> Loading story…
+              </p>
+            ) : centerView === "story-form" ? (
               <Panel
-                title={isCreatingStory ? "New story" : "Story details"}
-                description={
-                  isCreatingStory
-                    ? "Name your manuscript, then save to start adding scenes."
-                    : "Update the name and synopsis, then save to return to scenes."
-                }
+                title="Story details"
+                description="Update the name and synopsis, then save to return to chapters."
               >
                 <form
-                  onSubmit={(e) =>
-                    void (isCreatingStory
-                      ? onCreateStory(e)
-                      : onSaveStoryDetails(e))
-                  }
+                  onSubmit={(e) => void onSaveStoryDetails(e)}
                   className="space-y-5 rounded-lg border border-border bg-card p-5 shadow-sm"
                 >
                   <label className="flex flex-col gap-1.5">
@@ -974,17 +838,12 @@ export default function StoryWorkspace() {
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
                       disabled={busy || generatingDescription}
-                      placeholder={
-                        isCreatingStory
-                          ? "Optional synopsis"
-                          : "Synopsis, genre notes, or story bible summary"
-                      }
+                      placeholder="Synopsis, genre notes, or story bible summary"
                       className="min-h-[120px] leading-relaxed"
                     />
                   </label>
-                  {isEditingStory ? (
-                    <>
-                      <Button
+                  <>
+                    <Button
                         type="button"
                         variant="outline"
                         size="sm"
@@ -1003,54 +862,38 @@ export default function StoryWorkspace() {
                       </Button>
                       {scenes.length === 0 ? (
                         <p className="text-xs text-muted-foreground">
-                          Add at least one scene to generate a description.
+                          Add at least one chapter to generate a description.
                         </p>
                       ) : null}
-                    </>
-                  ) : null}
+                  </>
                   <div className="flex flex-wrap gap-2">
                     <Button type="submit" variant="cta" disabled={busy}>
                       {busy ? (
                         <>
-                          <Spinner />{" "}
-                          {isCreatingStory ? "Creating…" : "Saving…"}
+                          <Spinner /> Saving…
                         </>
-                      ) : isCreatingStory ? (
-                        "Save & start writing scenes"
                       ) : (
                         "Save story details"
                       )}
                     </Button>
-                    {isEditingStory ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        disabled={busy}
-                        onClick={() => setCenterView("scenes")}
-                      >
-                        Cancel
-                      </Button>
-                    ) : null}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => setCenterView("scenes")}
+                    >
+                      Cancel
+                    </Button>
                   </div>
                 </form>
               </Panel>
-            ) : centerView === "empty" ? (
-              <div className="rounded-lg border border-dashed border-border bg-muted/40 px-6 py-16 text-center">
-                <p className="text-sm font-medium text-foreground">
-                  Select or create a story
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Pick a story from the left, import a file, or click
-                  &ldquo;New story&rdquo;.
-                </p>
-              </div>
             ) : (
               <Panel
-                title={isEditingScene ? `Editing scene ${sceneNumber}` : "New scene"}
+                title={isEditingScene ? `Editing chapter ${sceneNumber}` : "New chapter"}
                 description={
                   isEditingScene
-                    ? "Update prose and claims, then save. Validation runs on save."
-                    : "Write prose and attach structured claims. Validation runs when you submit."
+                    ? "Update your chapter and save — story memory is extracted automatically."
+                    : "Write your chapter and submit — we detect characters, relationships, and canon."
                 }
               >
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
@@ -1083,9 +926,9 @@ export default function StoryWorkspace() {
                   onSubmit={onAddScene}
                   className="glass-panel space-y-5 rounded-[var(--radius-card)] p-5"
                 >
-                  <div className="grid gap-4 sm:grid-cols-[120px_1fr]">
-                    <label className="flex flex-col gap-1.5">
-                      <FieldLabel>Scene #</FieldLabel>
+                  <div className="space-y-4">
+                    <label className="flex w-full max-w-[8rem] flex-col gap-1.5">
+                      <FieldLabel>Chapter #</FieldLabel>
                       <Input
                         type="number"
                         required
@@ -1095,122 +938,59 @@ export default function StoryWorkspace() {
                           setSceneNumber(Number(e.target.value))
                         }
                         disabled={sceneDisabled}
-                        className="w-full sm:w-24"
                       />
                     </label>
-                    <label className="flex flex-col gap-1.5 sm:col-span-1">
-                      <FieldLabel>Scene text</FieldLabel>
+                    <label className="flex flex-col gap-1.5">
+                      <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <FieldLabel>Chapter text</FieldLabel>
+                        <span className="text-[11px] text-muted-foreground">
+                          Drag the corner to resize · use Focus on writing above
+                        </span>
+                      </div>
                       <Textarea
                         required
                         value={sceneText}
                         onChange={(e) => setSceneText(e.target.value)}
                         disabled={sceneDisabled}
-                        placeholder="What happens in this scene?"
-                        className={cn(
-                          "min-h-[160px] leading-relaxed",
-                          "bg-[#0f172a]/92 text-slate-50 placeholder:text-slate-300",
-                          "border-white/10 focus-visible:ring-2 focus-visible:ring-sky-200/30",
-                        )}
+                        placeholder="What happens in this chapter?"
+                        className={sceneTextareaClass}
                       />
                     </label>
                   </div>
 
+                  {!isWritingFocus ? (
                   <div>
-                    <div className="mb-3 flex items-center justify-between">
-                      <FieldLabel>Claims</FieldLabel>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={sceneDisabled}
-                        onClick={() => setClaims((c) => [...c, emptyClaim()])}
-                      >
-                        Add claim
-                      </Button>
-                    </div>
-                    <div className="space-y-3">
-                      {claims.map((c, i) => (
-                        <div
-                          key={i}
-                          className="rounded-md border border-border bg-muted/30 p-3"
-                        >
-                          <div className="grid gap-2 sm:grid-cols-3">
-                            <label className="flex flex-col gap-1">
-                              <span className="text-xs text-muted-foreground">
-                                Subject
-                              </span>
-                              <Input
-                                value={c.subject}
-                                onChange={(e) =>
-                                  updateClaim(i, { subject: e.target.value })
-                                }
-                                disabled={sceneDisabled}
-                                placeholder="Nahira"
-                              />
-                            </label>
-                            <label className="flex flex-col gap-1">
-                              <span className="text-xs text-muted-foreground">
-                                Predicate
-                              </span>
-                              <Input
-                                value={c.predicate}
-                                onChange={(e) =>
-                                  updateClaim(i, { predicate: e.target.value })
-                                }
-                                disabled={sceneDisabled}
-                                placeholder="trusts"
-                              />
-                            </label>
-                            <label className="flex flex-col gap-1">
-                              <span className="text-xs text-muted-foreground">
-                                Object
-                              </span>
-                              <Input
-                                value={c.object}
-                                onChange={(e) =>
-                                  updateClaim(i, { object: e.target.value })
-                                }
-                                disabled={sceneDisabled}
-                                placeholder="Ashan"
-                              />
-                            </label>
-                          </div>
-                          <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm">
-                            <input
-                              type="checkbox"
-                              className="size-4 rounded border-input accent-primary"
-                              checked={c.is_major_plotline}
-                              onChange={(e) =>
-                                updateClaim(i, {
-                                  is_major_plotline: e.target.checked,
-                                })
-                              }
-                              disabled={sceneDisabled}
-                            />
-                            <span className="text-muted-foreground">
-                              Major plotline
-                            </span>
-                          </label>
-                          {claims.length > 1 ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="mt-2 text-destructive hover:text-destructive"
-                              disabled={sceneDisabled}
-                              onClick={() =>
-                                setClaims((prev) =>
-                                  prev.filter((_, j) => j !== i),
-                                )
-                              }
-                            >
-                              Remove claim
-                            </Button>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
+                    <FieldLabel>Detected story memory</FieldLabel>
+                    {lastExtraction ? (
+                      <p className="mb-3 mt-1 text-xs text-muted-foreground">
+                        Found {lastExtraction.claim_count} claim
+                        {lastExtraction.claim_count === 1 ? "" : "s"} (
+                        {lastExtraction.approved_count} in canon,{" "}
+                        {lastExtraction.needs_review_count} to review) via{" "}
+                        {lastExtraction.source}.
+                        {lastExtraction.word_count > 3000
+                          ? " Long chapter — processed in multiple sections."
+                          : null}
+                      </p>
+                    ) : (
+                      <p className="mb-3 mt-1 text-xs leading-5 text-muted-foreground">
+                        High-confidence facts enter canon automatically. Medium
+                        confidence appears for your review.
+                      </p>
+                    )}
+                    <DetectedStoryMemory
+                      claims={claims.filter((c) => c.status !== "rejected")}
+                      disabled={sceneDisabled}
+                      onApprove={(id) => void onClaimApprove(id)}
+                      onReject={(id) => void onClaimReject(id)}
+                    />
                   </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Story memory is hidden in focus mode. Exit focus to review
+                      detected claims.
+                    </p>
+                  )}
 
                   <Button
                     type="submit"
@@ -1220,10 +1000,10 @@ export default function StoryWorkspace() {
                   >
                     {busy ? (
                       <>
-                        <Spinner /> Submitting scene…
+                        <Spinner /> Saving chapter…
                       </>
                     ) : (
-                      isEditingScene ? "Save changes" : "Submit scene"
+                      isEditingScene ? "Save changes" : "Submit chapter"
                     )}
                   </Button>
                 </form>
@@ -1232,10 +1012,20 @@ export default function StoryWorkspace() {
           </div>
         </main>
 
-        {/* Right — validation issues */}
-        <aside className="flex w-full shrink-0 flex-col border-t border-border bg-card/60 shadow-[0_18px_55px_rgba(0,0,0,0.06)] backdrop-blur-xl lg:w-80 lg:border-l lg:border-l-border lg:border-t-0">
-          <div className="flex items-center justify-between border-b border-border bg-secondary/40 px-4 py-3">
-            <div>
+        {rightOpen ? (
+          <div className="workspace-panel-shell">
+            <PanelResizeHandle side="right" onResize={resizeRight} />
+            <PanelEdgeCollapse
+              edge="right"
+              label="continuity"
+              onCollapse={() => setRightOpen(false)}
+            />
+            <aside
+              className="workspace-side-panel flex flex-col overflow-hidden border-t border-border bg-card/45 shadow-[0_18px_55px_rgba(0,0,0,0.06)] backdrop-blur-xl lg:border-l lg:border-l-border lg:border-t-0"
+              style={{ ["--panel-w" as string]: `${rightWidth}px` }}
+            >
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-secondary/40 px-4 py-3">
+            <div className="min-w-0">
               <h2 className="text-base font-semibold text-secondary-foreground">
                 Continuity
               </h2>
@@ -1247,7 +1037,7 @@ export default function StoryWorkspace() {
               type="button"
               variant="outline"
               size="sm"
-              disabled={storyId == null || busy}
+              disabled={storyLoading || busy}
               onClick={() => void loadIssues()}
             >
               Refresh
@@ -1255,10 +1045,8 @@ export default function StoryWorkspace() {
           </div>
 
           <div className="flex-1 overflow-y-auto p-4">
-            {storyId == null ? (
-              <p className="text-sm text-muted-foreground">
-                Issues appear here after you create a story and add scenes.
-              </p>
+            {storyLoading ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
             ) : issuesLoading && issues.length === 0 ? (
               <div className="space-y-3">
                 {[1, 2, 3].map((n) => (
@@ -1274,7 +1062,7 @@ export default function StoryWorkspace() {
                   No issues yet
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Contradictions show up when a new scene conflicts with earlier
+                  Contradictions show up when a new chapter conflicts with earlier
                   claims.
                 </p>
               </div>
@@ -1294,7 +1082,7 @@ export default function StoryWorkspace() {
                         {iss.severity}
                       </Badge>
                       <span className="text-xs text-muted-foreground">
-                        Scene {iss.scene_number}
+                        Chapter {iss.scene_number}
                       </span>
                     </div>
                     <p className="mt-2 text-sm leading-6 text-foreground">
@@ -1310,7 +1098,9 @@ export default function StoryWorkspace() {
               </p>
             ) : null}
           </div>
-        </aside>
+            </aside>
+          </div>
+        ) : null}
       </div>
       </div>
     </div>

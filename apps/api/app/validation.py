@@ -3,6 +3,9 @@ from sqlalchemy.orm import Session
 
 from app.models import Claim, Scene, ValidationIssue
 
+# Only approved claims participate in canon validation.
+CANON_STATUSES = ("approved", "canonized")
+
 
 def _norm(s: str) -> str:
     """Case- and whitespace-insensitive comparison key for claims."""
@@ -27,6 +30,9 @@ def validate_scene_claims(
     obj_key = func.lower(func.trim(Claim.claim_object))
 
     for claim in new_claims:
+        if claim.status not in CANON_STATUSES:
+            continue
+
         ns, np, no = _norm(claim.subject), _norm(claim.predicate), _norm(claim.claim_object)
 
         older_conflicts = (
@@ -35,6 +41,7 @@ def validate_scene_claims(
             .filter(
                 Claim.story_id == scene.story_id,
                 Scene.scene_number < scene.scene_number,
+                Claim.status.in_(CANON_STATUSES),
                 subj_key == ns,
                 pred_key == np,
                 obj_key != no,
@@ -67,6 +74,7 @@ def validate_scene_claims(
             .filter(
                 Claim.story_id == scene.story_id,
                 Scene.scene_number < scene.scene_number,
+                Claim.status.in_(CANON_STATUSES),
                 subj_key == ns,
                 obj_key == no,
                 pred_key != np,

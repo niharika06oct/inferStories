@@ -11,6 +11,7 @@ const apiProxyTarget =
 const nextConfig: NextConfig = {
   async rewrites() {
     return [
+      // /api/auth/* is handled by app/api/auth/[...path]/route.ts (strips X-Forwarded-Host).
       {
         source: "/api/upstream/:path*",
         destination: `${apiProxyTarget}/:path*`,

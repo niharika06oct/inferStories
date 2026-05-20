@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 # Load before reading DATABASE_URL (also done in app.database, but Alembic may run
 # with a different import path or ordering).
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool

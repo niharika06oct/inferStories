@@ -12,6 +12,7 @@ class Story(Base):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_user_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
@@ -61,6 +62,18 @@ class Claim(Base):
     is_major_plotline: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    claim_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    claim_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(default=1.0, nullable=False)
+    canon_level: Mapped[str] = mapped_column(
+        String(20), default="active", nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), default="approved", nullable=False
+    )
+    evidence_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)
     scene: Mapped["Scene"] = relationship(back_populates="claims")
 
 
