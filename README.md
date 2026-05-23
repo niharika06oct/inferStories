@@ -100,8 +100,8 @@ OPENAI_MODEL=gpt-4o-mini
 |------|-----------------|
 | **Left — Your stories** | List all stories; **Import from this device** (`.docx`, `.txt`, `.md`); **+ New story** |
 | **Left — Scenes & chapters** | Jump to a scene, **Write new scene**, download `.md` export |
-| **Center** | **New story** / **Story details** form (save → scene editor); scene prose + claims |
-| **Right — Continuity** | Validation issues (poll every 4s + **Refresh**) |
+| **Center** | **New story** / **Story details** form (save → scene editor); scene prose with **autosave** (existing chapters), browser spellcheck, optional grammar review, and claims |
+| **Right — Continuity** | Validation issues (**Refresh** to reload; also updates after you save a scene) |
 
 **Import flow:** pick a file → choose **new** or **existing** story → name scenes → import. If description is empty, a synopsis is generated from scene text after import.
 

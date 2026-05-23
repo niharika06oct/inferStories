@@ -42,6 +42,27 @@ import { DetectedStoryMemory } from "../components/DetectedStoryMemory";
 import { PanelEdgeCollapse } from "../components/PanelEdgeCollapse";
 import { PanelResizeHandle } from "../components/PanelResizeHandle";
 import { UserAccountMenuGate } from "../components/UserAccountMenu";
+import {
+  SceneTextEditor,
+  type SceneTextEditorHandle,
+} from "../components/SceneTextEditor";
+import {
+  WorkspaceRightPanel,
+  type RightPanelTab,
+} from "../components/WorkspaceRightPanel";
+import type { WritingIssue } from "../lib/grammarCheck";
+import {
+  applyTextReplacement,
+  issueKey,
+  issuesAfterApply,
+} from "../lib/applyWritingSuggestion";
+import { reconcileWritingIssuesAfterEdit } from "../lib/writingIssueSync";
+import {
+  clearSceneDraft,
+  loadSceneDraft,
+  saveSceneDraft,
+} from "../lib/sceneDraftStorage";
+import { useSceneAutosave } from "../lib/useSceneAutosave";
 
 function formatErr(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -94,8 +115,15 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
   } | null>(null);
   const [importSceneTitles, setImportSceneTitles] = useState<string[]>([]);
   const [generatingDescription, setGeneratingDescription] = useState(false);
+  const [writingIssues, setWritingIssues] = useState<WritingIssue[]>([]);
+  const [focusedWritingIssueKey, setFocusedWritingIssueKey] = useState<
+    string | null
+  >(null);
+  const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("writing");
   const errorBoxRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const sceneTextRef = useRef(sceneText);
+  const sceneEditorRef = useRef<SceneTextEditorHandle>(null);
   const workspace = useWorkspaceLayout();
   const {
     leftOpen,
@@ -126,13 +154,33 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
     }
   }, [storyId]);
 
-  const resetSceneEditor = useCallback((sceneList: SceneSummaryOut[]) => {
-    setEditingSceneId(null);
-    setSceneNumber(nextSceneNumber(sceneList));
-    setSceneText("");
-    setClaims([]);
-    setLastExtraction(null);
-  }, []);
+  const resetSceneEditor = useCallback(
+    (sceneList: SceneSummaryOut[]) => {
+      setEditingSceneId(null);
+      setSceneNumber(nextSceneNumber(sceneList));
+      setSceneText("");
+      setClaims([]);
+      setLastExtraction(null);
+      const draft = loadSceneDraft(storyId);
+      if (draft) {
+        setSceneNumber(draft.sceneNumber);
+        setSceneText(draft.sceneText);
+      }
+    },
+    [storyId],
+  );
+
+  const isEditingScene = editingSceneId != null;
+  const sceneFormActive =
+    centerView === "scenes" && !storyLoading;
+
+  const { saveState, lastSavedAt, markPersisted } = useSceneAutosave({
+    storyId,
+    sceneId: editingSceneId,
+    sceneNumber,
+    sceneText,
+    enabled: isEditingScene && sceneFormActive,
+  });
 
   const openScene = useCallback(
     async (sceneId: number) => {
@@ -145,13 +193,17 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
         setSceneText(scene.text);
         setClaims(scene.claims);
         setLastExtraction(null);
+        markPersisted({
+          sceneNumber: scene.scene_number,
+          sceneText: scene.text.trim(),
+        });
       } catch (err) {
         setError(formatErr(err));
       } finally {
         setBusy(false);
       }
     },
-    [storyId],
+    [storyId, markPersisted],
   );
 
   useEffect(() => {
@@ -202,12 +254,7 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
 
   useEffect(() => {
     if (storyLoading) return;
-    const kickoff = window.setTimeout(() => void loadIssues(), 0);
-    const id = window.setInterval(() => void loadIssues(), 4000);
-    return () => {
-      window.clearTimeout(kickoff);
-      window.clearInterval(id);
-    };
+    void loadIssues();
   }, [storyId, loadIssues, storyLoading]);
 
   useEffect(() => {
@@ -452,8 +499,12 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
       }
       setLastExtraction(extraction);
       const sceneList = (await loadScenes()) ?? [];
+      const trimmed = sceneText.trim();
+      markPersisted({ sceneNumber, sceneText: trimmed });
+      clearSceneDraft(storyId);
       if (savedId != null) {
         await openScene(savedId);
+        markPersisted({ sceneNumber, sceneText: trimmed });
       } else {
         resetSceneEditor(sceneList);
       }
@@ -465,8 +516,73 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
     }
   }
 
-  const sceneDisabled = busy || centerView !== "scenes" || storyLoading;
-  const isEditingScene = editingSceneId != null;
+  const sceneDisabled = busy || !sceneFormActive;
+
+  useEffect(() => {
+    sceneTextRef.current = sceneText;
+  }, [sceneText]);
+
+  useEffect(() => {
+    setWritingIssues([]);
+    setFocusedWritingIssueKey(null);
+  }, [editingSceneId]);
+
+  const focusWritingIssue = useCallback((issue: WritingIssue) => {
+    setRightPanelTab("writing");
+    setFocusedWritingIssueKey(issueKey(issue));
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        sceneEditorRef.current?.scrollToIssue(issue);
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!focusedWritingIssueKey) return;
+    const stillPresent = writingIssues.some(
+      (item) => issueKey(item) === focusedWritingIssueKey,
+    );
+    if (!stillPresent) setFocusedWritingIssueKey(null);
+  }, [writingIssues, focusedWritingIssueKey]);
+
+  const applyWritingSuggestion = useCallback(
+    (issue: WritingIssue, replacement: string) => {
+      const appliedKey = issueKey(issue);
+      const nextText = applyTextReplacement(
+        sceneText,
+        issue.offset,
+        issue.length,
+        replacement,
+      );
+      sceneTextRef.current = nextText;
+      setSceneText(nextText);
+      setWritingIssues((prev) => issuesAfterApply(prev, issue, replacement));
+      setFocusedWritingIssueKey((key) =>
+        key === appliedKey ? null : key,
+      );
+      if (editingSceneId != null) {
+        markPersisted({
+          sceneNumber,
+          sceneText: nextText.trim(),
+        });
+      }
+    },
+    [sceneText, sceneNumber, editingSceneId, markPersisted],
+  );
+
+  useEffect(() => {
+    if (editingSceneId != null || storyLoading) return;
+    const trimmed = sceneText.trim();
+    if (!trimmed) {
+      clearSceneDraft(storyId);
+      return;
+    }
+    saveSceneDraft(storyId, {
+      sceneNumber,
+      sceneText: trimmed,
+      updatedAt: new Date().toISOString(),
+    });
+  }, [storyId, editingSceneId, sceneNumber, sceneText, storyLoading]);
 
   const sceneTextareaClass = cn(
     "w-full resize-y text-[15px] leading-7",
@@ -478,8 +594,8 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
   );
 
   return (
-    <div className="workspace-canvas flex min-h-screen flex-col">
-      <div className="workspace-content flex min-h-screen flex-col">
+    <div className="workspace-canvas workspace-canvas--editor flex min-h-0 flex-col">
+      <div className="workspace-content flex min-h-0 flex-1 flex-col">
       <header className="glass-panel flex h-14 shrink-0 items-center justify-between border-b border-border/60 px-4 lg:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <Link
@@ -544,7 +660,7 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
         </div>
       ) : null}
 
-      <div className="relative flex min-h-0 flex-1 flex-col lg:flex-row">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
         {!leftOpen ? (
           <button
             type="button"
@@ -560,7 +676,7 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
             type="button"
             className="workspace-edge-tab workspace-edge-tab--right"
             onClick={() => setRightOpen(true)}
-            aria-label="Show continuity panel"
+            aria-label="Show checks panel"
           >
             &lt;
           </button>
@@ -944,13 +1060,46 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
                       <div className="flex flex-wrap items-baseline justify-between gap-2">
                         <FieldLabel>Chapter text</FieldLabel>
                         <span className="text-[11px] text-muted-foreground">
-                          Drag the corner to resize · use Focus on writing above
+                          {isEditingScene ? (
+                            <>
+                              {saveState === "saving"
+                                ? "Saving…"
+                                : saveState === "saved" && lastSavedAt
+                                  ? `Saved ${lastSavedAt.toLocaleTimeString()}`
+                                  : saveState === "error"
+                                    ? "Autosave failed — use Save & analyze below"
+                                    : saveState === "dirty"
+                                      ? "Saving soon…"
+                                      : "Edits save automatically"}
+                            </>
+                          ) : sceneText.trim() ? (
+                            "Draft kept on this device until you submit"
+                          ) : (
+                            "Drag the corner to resize · Focus on writing above"
+                          )}
                         </span>
                       </div>
-                      <Textarea
+                      <SceneTextEditor
+                        ref={sceneEditorRef}
                         required
                         value={sceneText}
-                        onChange={(e) => setSceneText(e.target.value)}
+                        focusedIssueKey={focusedWritingIssueKey}
+                        onChange={(value) => {
+                          const prev = sceneTextRef.current;
+                          sceneTextRef.current = value;
+                          setSceneText(value);
+                          setWritingIssues((current) =>
+                            reconcileWritingIssuesAfterEdit(
+                              prev,
+                              value,
+                              current,
+                            ),
+                          );
+                        }}
+                        issues={
+                          rightPanelTab === "writing" ? writingIssues : []
+                        }
+                        onIssueClick={focusWritingIssue}
                         disabled={sceneDisabled}
                         placeholder="What happens in this chapter?"
                         className={sceneTextareaClass}
@@ -1002,8 +1151,10 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
                       <>
                         <Spinner /> Saving chapter…
                       </>
+                    ) : isEditingScene ? (
+                      "Save & analyze memory"
                     ) : (
-                      isEditingScene ? "Save changes" : "Submit chapter"
+                      "Submit chapter"
                     )}
                   </Button>
                 </form>
@@ -1017,87 +1168,30 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
             <PanelResizeHandle side="right" onResize={resizeRight} />
             <PanelEdgeCollapse
               edge="right"
-              label="continuity"
+              label="checks"
               onCollapse={() => setRightOpen(false)}
             />
             <aside
-              className="workspace-side-panel flex flex-col overflow-hidden border-t border-border bg-card/45 shadow-[0_18px_55px_rgba(0,0,0,0.06)] backdrop-blur-xl lg:border-l lg:border-l-border lg:border-t-0"
+              className="workspace-side-panel workspace-side-panel--checks flex min-h-0 flex-col overflow-hidden border-t border-border bg-card/45 shadow-[0_18px_55px_rgba(0,0,0,0.06)] backdrop-blur-xl lg:border-l lg:border-l-border lg:border-t-0"
               style={{ ["--panel-w" as string]: `${rightWidth}px` }}
             >
-          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-secondary/40 px-4 py-3">
-            <div className="min-w-0">
-              <h2 className="text-base font-semibold text-secondary-foreground">
-                Continuity
-              </h2>
-              <p className="text-xs text-muted-foreground">
-                Auto-refreshes every 4s
-              </p>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={storyLoading || busy}
-              onClick={() => void loadIssues()}
-            >
-              Refresh
-            </Button>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-4">
-            {storyLoading ? (
-              <p className="text-sm text-muted-foreground">Loading…</p>
-            ) : issuesLoading && issues.length === 0 ? (
-              <div className="space-y-3">
-                {[1, 2, 3].map((n) => (
-                  <div
-                    key={n}
-                    className="h-16 animate-pulse rounded-lg bg-muted"
-                  />
-                ))}
-              </div>
-            ) : issues.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border bg-muted/30 px-4 py-8 text-center">
-                <p className="text-sm font-medium text-foreground">
-                  No issues yet
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Contradictions show up when a new chapter conflicts with earlier
-                  claims.
-                </p>
-              </div>
-            ) : (
-              <ul className="space-y-3">
-                {issues.map((iss) => (
-                  <li
-                    key={iss.id}
-                    className="rounded-lg border border-border bg-background p-3 shadow-sm"
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge
-                        variant={
-                          iss.severity === "high" ? "destructive" : "warning"
-                        }
-                      >
-                        {iss.severity}
-                      </Badge>
-                      <span className="text-xs text-muted-foreground">
-                        Chapter {iss.scene_number}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-foreground">
-                      {iss.message}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {issuesLoadedAt ? (
-              <p className="mt-4 text-center text-xs text-muted-foreground">
-                Updated {new Date(issuesLoadedAt).toLocaleTimeString()}
-              </p>
-            ) : null}
-          </div>
+              <WorkspaceRightPanel
+                storyLoading={storyLoading}
+                busy={busy}
+                chapterText={sceneText}
+                chapterDisabled={sceneDisabled}
+                writingIssues={writingIssues}
+                onWritingIssuesChange={setWritingIssues}
+                onApplyWritingSuggestion={applyWritingSuggestion}
+                focusedWritingIssueKey={focusedWritingIssueKey}
+                onWritingIssueSelect={focusWritingIssue}
+                activeTab={rightPanelTab}
+                onTabChange={setRightPanelTab}
+                continuityIssues={issues}
+                continuityLoading={issuesLoading}
+                continuityLoadedAt={issuesLoadedAt}
+                onRefreshContinuity={() => void loadIssues()}
+              />
             </aside>
           </div>
         ) : null}

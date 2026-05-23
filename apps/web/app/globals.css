@@ -224,6 +224,20 @@ html.dark .workspace-canvas::after {
   min-height: 100vh;
 }
 
+/* Story editor: lock workspace to viewport so side panels scroll internally */
+.workspace-canvas--editor {
+  height: 100dvh;
+  max-height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-canvas--editor > .workspace-content {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
 .brand-mark {
   background: linear-gradient(
     135deg,
@@ -374,14 +388,37 @@ html.dark .account-panel {
 .workspace-panel-shell {
   position: relative;
   display: flex;
+  min-height: 0;
   max-height: 45vh;
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 @media (min-width: 1024px) {
   .workspace-panel-shell {
-    max-height: none;
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+    align-self: stretch;
+    flex-direction: column;
   }
+}
+
+.workspace-side-panel--checks {
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+}
+
+.writing-review-panel__scroll {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.writing-review-panel__issue--focused {
+  border-color: color-mix(in srgb, var(--primary) 65%, transparent);
+  background: color-mix(in srgb, var(--primary) 12%, var(--card));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 35%, transparent);
 }
 
 .workspace-edge-tab {
@@ -422,6 +459,25 @@ html.dark .account-panel {
   right: 0;
   border-radius: 0.5rem 0 0 0.5rem;
   border-right: none;
+}
+
+.scene-text-editor mark,
+.scene-text-editor__issue {
+  color: inherit;
+  background: transparent;
+  background-color: transparent;
+  text-decoration: underline;
+  text-decoration-color: rgb(56 189 248);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+  text-decoration-skip-ink: none;
+}
+
+.scene-text-editor__issue--active {
+  text-decoration-color: rgb(125 211 252);
+  text-decoration-thickness: 3px;
+  background: color-mix(in srgb, rgb(56 189 248) 22%, transparent);
+  border-radius: 2px;
 }
 
 .scene-textarea--default {

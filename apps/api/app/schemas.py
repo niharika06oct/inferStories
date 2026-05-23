@@ -143,6 +143,8 @@ class SceneUpdate(BaseModel):
     scene_number: int = Field(ge=1)
     text: str = Field(min_length=1)
     claims: list[ClaimIn] = Field(default_factory=list)
+    # When false, only persist chapter text/number (for editor autosave).
+    run_extraction: bool = True
 
 
 class SceneOut(BaseModel):

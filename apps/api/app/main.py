@@ -307,6 +307,25 @@ def update_scene(
             detail="Scene number already exists for this story",
         ) from None
 
+    if not payload.run_extraction:
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Constraint violation while saving scene",
+            ) from None
+        db.refresh(scene)
+        return SceneOut(
+            id=scene.id,
+            story_id=scene.story_id,
+            scene_number=scene.scene_number,
+            text=scene.text,
+            issues=[],
+            extraction=None,
+        )
+
     _, extraction = save_scene_with_extraction(
         db, scene, payload.claims, run_extraction=True
     )

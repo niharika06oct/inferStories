@@ -227,6 +227,7 @@ export async function updateScene(
     scene_number: number;
     text: string;
     claims: ClaimIn[];
+    run_extraction?: boolean;
   },
 ): Promise<SceneOut> {
   const res = await fetch(`${apiBase()}/stories/${storyId}/scenes/${sceneId}`, {
