@@ -100,8 +100,8 @@ OPENAI_MODEL=gpt-4o-mini
 |------|-----------------|
 | **Left — Your stories** | List all stories; **Import from this device** (`.docx`, `.txt`, `.md`); **+ New story** |
 | **Left — Scenes & chapters** | Jump to a scene, **Write new scene**, download `.md` export |
-| **Center** | **New story** / **Story details** form (save → scene editor); scene prose with **autosave** (existing chapters), browser spellcheck, optional grammar review, and claims |
-| **Right — Continuity** | Validation issues (**Refresh** to reload; also updates after you save a scene) |
+| **Center** | Story metadata; chapter text with **autosave**, in-editor **grammar underlines** (right-click to apply/dismiss), **POV character**, **Save & analyze memory**, story-memory summary |
+| **Right — accordion** | **Continuity**; **New / Accepted / Rejected claims** (expand one section at a time; click a claim to jump to evidence in the chapter) |
 
 **Import flow:** pick a file → choose **new** or **existing** story → name scenes → import. If description is empty, a synopsis is generated from scene text after import.
 
@@ -174,15 +174,117 @@ curl -s -X POST http://127.0.0.1:8001/stories/1/validate
 
 ## Workflow (high level)
 
+inferStories splits **writing** (browser + Next.js), **memory** (FastAPI + Postgres), and **optional AI** (OpenAI for extraction/synopses). The diagrams below are the system design for how the website behaves end-to-end.
+
+### System architecture
+
+```mermaid
+flowchart TB
+    subgraph Browser["Browser — localhost:3000"]
+        Pages["Pages: Library · StoryEditor"]
+        Editor["Chapter editor<br/>underlines · claim highlight"]
+    end
+
+    subgraph Web["apps/web — Next.js"]
+        Upstream["/api/upstream/* → FastAPI"]
+        AuthRoute["/api/auth/* → auth-service"]
+        LTProxy["/api/writing/check → LanguageTool"]
+    end
+
+    subgraph Backend["apps/api — FastAPI :8001"]
+        API["REST: stories · scenes · claims · validate"]
+        Extract["Claim extraction<br/>structural → OpenAI → heuristic"]
+        Canon["Continuity rules<br/>compare chapter vs earlier canon"]
+    end
+
+    AuthSvc["auth-service :4000<br/>session / Bearer token"]
+    DB[(PostgreSQL<br/>stories · scenes · claims · issues)]
+    OpenAI["OpenAI API<br/>optional"]
+    LT["LanguageTool<br/>grammar / spelling"]
+
+    Pages --> Upstream --> API
+    Pages --> AuthRoute --> AuthSvc
+    Editor --> LTProxy --> LT
+    API --> AuthSvc
+    API --> DB
+    API --> Extract --> DB
+    API --> Canon --> DB
+    Extract --> OpenAI
+```
+
+| Request path | Purpose |
+|--------------|---------|
+| `/api/upstream/...` | Story/scene CRUD, claims, continuity issues (Bearer from auth-service) |
+| `/api/auth/...` | Sign-in, session cookies/token for the UI |
+| `/api/writing/check` | Server-side grammar check (avoids CORS to LanguageTool) |
+
+### Writer workflow (website functionality)
+
 ```mermaid
 flowchart TD
-    A[Install Python, Node, pnpm, PostgreSQL] --> B[apps/api .env + DATABASE_URL]
-    B --> C[uvicorn :8001 — Alembic on startup]
-    C --> D[apps/web .env.local API_PROXY_TARGET]
-    D --> E[pnpm dev — inferStories workspace]
-    E --> F[List / import / create story]
-    F --> G[Add or edit scenes + claims]
-    G --> H[Continuity panel — validate / poll]
+    Start([Library / home]) --> SignIn{Authenticated?}
+    SignIn -->|no| Login[Login via auth-service]
+    Login --> Start
+    SignIn -->|yes| Hub[Your stories]
+
+    Hub --> NewStory[+ New story]
+    Hub --> Import[Import .docx / .txt / .md]
+    Hub --> OpenStory[Open story → StoryEditor]
+
+    Import --> Split[Split into chapters] --> Hub
+    NewStory --> Meta[Title · description] --> OpenStory
+
+    OpenStory --> PickChapter[Select or create chapter]
+
+    subgraph Center["Center — chapter editor"]
+        PickChapter --> Write[Edit chapter text + optional POV character]
+        Write --> Autosave["Autosave (~2s)<br/>PATCH text only<br/>run_extraction = false"]
+        Write --> Grammar["Grammar check (~3.5s debounce)<br/>blue underlines in editor"]
+        Grammar --> RCMenu["Right-click underline<br/>Apply fix or Dismiss<br/>dismissals persist in localStorage"]
+        Write --> Analyze["Save & analyze memory<br/>run_extraction = true"]
+    end
+
+    subgraph Extract["API — extraction on analyze"]
+        Analyze --> Chunk[Chunk long chapters]
+        Chunk --> Structural[Structural patterns + POV-aware I → character]
+        Chunk --> LLM[OpenAI if configured<br/>else heuristic fallback]
+        Structural --> StoreClaims[(Save claims with status)]
+        LLM --> StoreClaims
+        StoreClaims --> Confidence["approved / needs_review / suggested"]
+    end
+
+    StoreClaims --> Validate[Validate vs claims in earlier chapters]
+    Validate --> StoreIssues[(Persist ValidationIssue rows)]
+
+    subgraph Right["Right panel — accordion sections"]
+        StoreIssues --> Cont["Continuity"]
+        Confidence --> NewC["New claims<br/>approve · reject"]
+        Confidence --> Acc["Accepted claims"]
+        Confidence --> Rej["Rejected claims<br/>hidden from New until opened"]
+    end
+
+    NewC -->|click claim card| Jump[Scroll chapter + amber highlight<br/>evidence quote in text]
+    Cont -->|Refresh| Poll[Reload continuity list]
+
+    Write --> ExportMd[Export story .md]
+```
+
+**Save behavior (important):**
+
+| Action | API | Claims / continuity |
+|--------|-----|---------------------|
+| **Autosave** while typing | `PATCH` scene, `run_extraction: false` | Text + POV only; no new extraction |
+| **Save & analyze memory** | `PATCH` or `POST` scene, `run_extraction: true` | Re-extracts claims for that chapter, re-runs continuity validation |
+| **Approve / reject claim** | `PATCH` claim status | Moves claim between New / Accepted / Rejected in the UI |
+
+### Local dev startup (quick)
+
+```mermaid
+flowchart LR
+    PG[(Postgres)] --> API[uvicorn :8001]
+    API --> Web[pnpm dev :3000]
+    Auth[auth-service :4000] --> Web
+    Web --> Browser[Open inferStories]
 ```
 
 ## Roadmap
