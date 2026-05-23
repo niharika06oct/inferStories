@@ -245,6 +245,7 @@ def list_scenes(
             story_id=scene.story_id,
             scene_number=scene.scene_number,
             text=scene.text,
+            pov_character=scene.pov_character,
             created_at=scene.created_at,
             claim_count=claim_count,
         )
@@ -273,6 +274,7 @@ def get_scene(
         story_id=scene.story_id,
         scene_number=scene.scene_number,
         text=scene.text,
+        pov_character=scene.pov_character,
         created_at=scene.created_at,
         claims=[claim_to_out(c) for c in scene.claims],
     )
@@ -297,6 +299,7 @@ def update_scene(
 
     scene.scene_number = payload.scene_number
     scene.text = payload.text
+    scene.pov_character = (payload.pov_character or "").strip() or None
 
     try:
         db.flush()
@@ -360,6 +363,7 @@ def add_scene(
         story_id=story_id,
         scene_number=payload.scene_number,
         text=payload.text,
+        pov_character=(payload.pov_character or "").strip() or None,
     )
     db.add(scene)
     try:

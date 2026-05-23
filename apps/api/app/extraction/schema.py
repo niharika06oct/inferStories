@@ -33,8 +33,26 @@ class ExtractedClaim(BaseModel):
     chunk_index: int = Field(default=0, ge=0)
 
 
+class ChunkExtractionDebug(BaseModel):
+    chunk_index: int
+    word_count: int
+    openai_attempted: bool = False
+    openai_ok: bool = False
+    fallback_used: bool = False
+    structural_claims: int = 0
+    llm_claims: int = 0
+    entities: list[str] = Field(default_factory=list)
+
+
 class ExtractionResult(BaseModel):
     claims: list[ExtractedClaim] = Field(default_factory=list)
-    source: str  # openai | heuristic
+    source: str  # openai | heuristic | hybrid
     chunk_count: int = 1
     word_count: int = 0
+    error: str | None = None
+    duration_ms: int = 0
+    openai_attempted: bool = False
+    fallback_used: bool = False
+    large_chapter_warning: bool = False
+    structural_entity_count: int = 0
+    chunks: list[ChunkExtractionDebug] = Field(default_factory=list)

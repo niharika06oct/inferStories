@@ -92,6 +92,7 @@ export type SceneSummaryOut = {
   story_id: number;
   scene_number: number;
   text: string;
+  pov_character?: string | null;
   created_at: string;
   claim_count: number;
 };
@@ -113,6 +114,17 @@ export type ClaimOut = {
   chunk_index?: number | null;
 };
 
+export type ChunkExtractionDebugOut = {
+  chunk_index: number;
+  word_count: number;
+  openai_attempted: boolean;
+  openai_ok: boolean;
+  fallback_used: boolean;
+  structural_claims: number;
+  llm_claims: number;
+  entities: string[];
+};
+
 export type SceneExtractionOut = {
   source: string;
   chunk_count: number;
@@ -121,6 +133,13 @@ export type SceneExtractionOut = {
   approved_count: number;
   needs_review_count: number;
   suggested_count: number;
+  error?: string | null;
+  duration_ms?: number;
+  openai_attempted?: boolean;
+  fallback_used?: boolean;
+  large_chapter_warning?: boolean;
+  structural_entity_count?: number;
+  chunks?: ChunkExtractionDebugOut[];
 };
 
 export type SceneDetailOut = {
@@ -128,6 +147,7 @@ export type SceneDetailOut = {
   story_id: number;
   scene_number: number;
   text: string;
+  pov_character?: string | null;
   created_at: string;
   claims: ClaimOut[];
 };
@@ -226,6 +246,7 @@ export async function updateScene(
   body: {
     scene_number: number;
     text: string;
+    pov_character?: string | null;
     claims: ClaimIn[];
     run_extraction?: boolean;
   },
@@ -244,6 +265,7 @@ export async function addScene(
   body: {
     scene_number: number;
     text: string;
+    pov_character?: string | null;
     claims: ClaimIn[];
   },
 ): Promise<SceneOut> {

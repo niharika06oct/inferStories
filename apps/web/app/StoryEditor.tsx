@@ -38,7 +38,7 @@ import {
   readManuscriptFile,
 } from "../lib/readManuscriptFile";
 import { useWorkspaceLayout } from "../lib/useWorkspaceLayout";
-import { DetectedStoryMemory } from "../components/DetectedStoryMemory";
+import { ExtractionDebugPanel } from "../components/ExtractionDebugPanel";
 import { PanelEdgeCollapse } from "../components/PanelEdgeCollapse";
 import { PanelResizeHandle } from "../components/PanelResizeHandle";
 import { UserAccountMenuGate } from "../components/UserAccountMenu";
@@ -48,14 +48,18 @@ import {
 } from "../components/SceneTextEditor";
 import {
   WorkspaceRightPanel,
-  type RightPanelTab,
+  type WorkspaceRightPanelHandle,
 } from "../components/WorkspaceRightPanel";
+import { claimBucketCounts } from "../lib/claimBuckets";
 import type { WritingIssue } from "../lib/grammarCheck";
 import {
   applyTextReplacement,
-  issueKey,
   issuesAfterApply,
 } from "../lib/applyWritingSuggestion";
+import { findClaimEvidenceSpan } from "../lib/claimEvidenceSpan";
+import { useGrammarCheck } from "../lib/useGrammarCheck";
+import { rememberDismissedWritingIssue } from "../lib/writingDismissedStorage";
+import { writingIssueFingerprint } from "../lib/writingIssueFingerprint";
 import { reconcileWritingIssuesAfterEdit } from "../lib/writingIssueSync";
 import {
   clearSceneDraft,
@@ -97,6 +101,7 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
 
   const [editingSceneId, setEditingSceneId] = useState<number | null>(null);
   const [sceneNumber, setSceneNumber] = useState(1);
+  const [povCharacter, setPovCharacter] = useState("");
   const [sceneText, setSceneText] = useState("");
   const [claims, setClaims] = useState<ClaimOut[]>([]);
   const [lastExtraction, setLastExtraction] = useState<SceneExtractionOut | null>(
@@ -108,6 +113,7 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
   const [issuesLoading, setIssuesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [analyzeStatus, setAnalyzeStatus] = useState<string | null>(null);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [importDraft, setImportDraft] = useState<{
     fileName: string;
@@ -115,15 +121,16 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
   } | null>(null);
   const [importSceneTitles, setImportSceneTitles] = useState<string[]>([]);
   const [generatingDescription, setGeneratingDescription] = useState(false);
-  const [writingIssues, setWritingIssues] = useState<WritingIssue[]>([]);
-  const [focusedWritingIssueKey, setFocusedWritingIssueKey] = useState<
-    string | null
-  >(null);
-  const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("writing");
+  const [focusedClaimId, setFocusedClaimId] = useState<number | null>(null);
+  const [claimFocusSpan, setClaimFocusSpan] = useState<{
+    offset: number;
+    length: number;
+  } | null>(null);
   const errorBoxRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sceneTextRef = useRef(sceneText);
   const sceneEditorRef = useRef<SceneTextEditorHandle>(null);
+  const rightPanelRef = useRef<WorkspaceRightPanelHandle>(null);
   const workspace = useWorkspaceLayout();
   const {
     leftOpen,
@@ -158,6 +165,7 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
     (sceneList: SceneSummaryOut[]) => {
       setEditingSceneId(null);
       setSceneNumber(nextSceneNumber(sceneList));
+      setPovCharacter("");
       setSceneText("");
       setClaims([]);
       setLastExtraction(null);
@@ -174,11 +182,25 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
   const sceneFormActive =
     centerView === "scenes" && !storyLoading;
 
+  const {
+    issues: writingIssues,
+    setIssues: setWritingIssues,
+    checking: grammarChecking,
+    checkError: grammarCheckError,
+    dismissedRef: dismissedWritingRef,
+  } = useGrammarCheck({
+    storyId,
+    sceneId: editingSceneId,
+    text: sceneText,
+    enabled: sceneFormActive && sceneText.trim().length >= 2,
+  });
+
   const { saveState, lastSavedAt, markPersisted } = useSceneAutosave({
     storyId,
     sceneId: editingSceneId,
     sceneNumber,
     sceneText,
+    povCharacter,
     enabled: isEditingScene && sceneFormActive,
   });
 
@@ -190,12 +212,14 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
         const scene = await fetchScene(storyId, sceneId);
         setEditingSceneId(scene.id);
         setSceneNumber(scene.scene_number);
+        setPovCharacter(scene.pov_character ?? "");
         setSceneText(scene.text);
         setClaims(scene.claims);
         setLastExtraction(null);
         markPersisted({
           sceneNumber: scene.scene_number,
           sceneText: scene.text.trim(),
+          povCharacter: (scene.pov_character ?? "").trim(),
         });
       } catch (err) {
         setError(formatErr(err));
@@ -485,12 +509,16 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
       const body = {
         scene_number: sceneNumber,
         text: sceneText.trim(),
+        pov_character: povCharacter.trim() || null,
         claims: [] as { subject: string; predicate: string; object: string; is_major_plotline: boolean }[],
       };
       let savedId = editingSceneId;
       let extraction: SceneExtractionOut | null = null;
       if (editingSceneId != null) {
-        const res = await updateScene(storyId, editingSceneId, body);
+        const res = await updateScene(storyId, editingSceneId, {
+          ...body,
+          run_extraction: true,
+        });
         extraction = res.extraction ?? null;
       } else {
         const res = await addScene(storyId, body);
@@ -500,15 +528,29 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
       setLastExtraction(extraction);
       const sceneList = (await loadScenes()) ?? [];
       const trimmed = sceneText.trim();
-      markPersisted({ sceneNumber, sceneText: trimmed });
+      markPersisted({
+        sceneNumber,
+        sceneText: trimmed,
+        povCharacter: povCharacter.trim(),
+      });
       clearSceneDraft(storyId);
       if (savedId != null) {
         await openScene(savedId);
-        markPersisted({ sceneNumber, sceneText: trimmed });
+        markPersisted({
+          sceneNumber,
+          sceneText: trimmed,
+          povCharacter: povCharacter.trim(),
+        });
       } else {
         resetSceneEditor(sceneList);
       }
       await loadIssues();
+      if (
+        extraction &&
+        extraction.needs_review_count + extraction.suggested_count > 0
+      ) {
+        rightPanelRef.current?.expandSection("newClaims");
+      }
     } catch (err) {
       setError(formatErr(err));
     } finally {
@@ -523,31 +565,80 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
   }, [sceneText]);
 
   useEffect(() => {
-    setWritingIssues([]);
-    setFocusedWritingIssueKey(null);
-  }, [editingSceneId]);
-
-  const focusWritingIssue = useCallback((issue: WritingIssue) => {
-    setRightPanelTab("writing");
-    setFocusedWritingIssueKey(issueKey(issue));
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        sceneEditorRef.current?.scrollToIssue(issue);
-      });
-    });
-  }, []);
+    if (!busy) {
+      setAnalyzeStatus(null);
+      return;
+    }
+    const steps = [
+      "Saving chapter…",
+      "Chunking text…",
+      "Running structural scan…",
+      "Extracting story memory…",
+      "Validating canon…",
+    ];
+    let index = 0;
+    setAnalyzeStatus(steps[0]);
+    const timer = window.setInterval(() => {
+      index = Math.min(index + 1, steps.length - 1);
+      setAnalyzeStatus(steps[index]);
+    }, 1100);
+    return () => window.clearInterval(timer);
+  }, [busy]);
 
   useEffect(() => {
-    if (!focusedWritingIssueKey) return;
-    const stillPresent = writingIssues.some(
-      (item) => issueKey(item) === focusedWritingIssueKey,
-    );
-    if (!stillPresent) setFocusedWritingIssueKey(null);
-  }, [writingIssues, focusedWritingIssueKey]);
+    setFocusedClaimId(null);
+    setClaimFocusSpan(null);
+  }, [editingSceneId]);
+
+  const rememberWritingDismissal = useCallback(
+    (issue: WritingIssue) => {
+      const fp = writingIssueFingerprint(issue);
+      rememberDismissedWritingIssue(storyId, editingSceneId, fp);
+      dismissedWritingRef.current.add(fp);
+    },
+    [storyId, editingSceneId, dismissedWritingRef],
+  );
+
+  const dismissWritingIssue = useCallback(
+    (issue: WritingIssue) => {
+      rememberWritingDismissal(issue);
+      const fp = writingIssueFingerprint(issue);
+      setWritingIssues((prev) =>
+        prev.filter((item) => writingIssueFingerprint(item) !== fp),
+      );
+    },
+    [rememberWritingDismissal, setWritingIssues],
+  );
+
+  const focusClaimInText = useCallback(
+    (claim: ClaimOut) => {
+      const span = findClaimEvidenceSpan(sceneText, claim);
+      setFocusedClaimId(claim.id);
+      setClaimFocusSpan(span);
+      if (claim.status === "rejected") {
+        rightPanelRef.current?.expandSection("rejectedClaims");
+      } else if (claim.status === "approved") {
+        rightPanelRef.current?.expandSection("acceptedClaims");
+      } else {
+        rightPanelRef.current?.expandSection("newClaims");
+      }
+      if (span) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            sceneEditorRef.current?.scrollToRange(
+              span.offset,
+              span.offset + span.length,
+            );
+          });
+        });
+      }
+    },
+    [sceneText],
+  );
 
   const applyWritingSuggestion = useCallback(
     (issue: WritingIssue, replacement: string) => {
-      const appliedKey = issueKey(issue);
+      rememberWritingDismissal(issue);
       const nextText = applyTextReplacement(
         sceneText,
         issue.offset,
@@ -557,17 +648,23 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
       sceneTextRef.current = nextText;
       setSceneText(nextText);
       setWritingIssues((prev) => issuesAfterApply(prev, issue, replacement));
-      setFocusedWritingIssueKey((key) =>
-        key === appliedKey ? null : key,
-      );
       if (editingSceneId != null) {
         markPersisted({
           sceneNumber,
           sceneText: nextText.trim(),
+          povCharacter: povCharacter.trim(),
         });
       }
     },
-    [sceneText, sceneNumber, editingSceneId, markPersisted],
+    [
+      sceneText,
+      sceneNumber,
+      povCharacter,
+      editingSceneId,
+      markPersisted,
+      rememberWritingDismissal,
+      setWritingIssues,
+    ],
   );
 
   useEffect(() => {
@@ -1043,19 +1140,35 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
                   className="glass-panel space-y-5 rounded-[var(--radius-card)] p-5"
                 >
                   <div className="space-y-4">
-                    <label className="flex w-full max-w-[8rem] flex-col gap-1.5">
-                      <FieldLabel>Chapter #</FieldLabel>
-                      <Input
-                        type="number"
-                        required
-                        min={1}
-                        value={sceneNumber}
-                        onChange={(e) =>
-                          setSceneNumber(Number(e.target.value))
-                        }
-                        disabled={sceneDisabled}
-                      />
-                    </label>
+                    <div className="flex flex-wrap gap-4">
+                      <label className="flex w-full max-w-[8rem] flex-col gap-1.5">
+                        <FieldLabel>Chapter #</FieldLabel>
+                        <Input
+                          type="number"
+                          required
+                          min={1}
+                          value={sceneNumber}
+                          onChange={(e) =>
+                            setSceneNumber(Number(e.target.value))
+                          }
+                          disabled={sceneDisabled}
+                        />
+                      </label>
+                      <label className="flex min-w-[12rem] flex-1 flex-col gap-1.5">
+                        <FieldLabel>POV character</FieldLabel>
+                        <Input
+                          type="text"
+                          placeholder="e.g. Marcus"
+                          value={povCharacter}
+                          onChange={(e) => setPovCharacter(e.target.value)}
+                          disabled={sceneDisabled}
+                        />
+                        <span className="text-[11px] text-muted-foreground">
+                          Unquoted &quot;I&quot; in this chapter is treated as this
+                          character when analyzing memory.
+                        </span>
+                      </label>
+                    </div>
                     <label className="flex flex-col gap-1.5">
                       <div className="flex flex-wrap items-baseline justify-between gap-2">
                         <FieldLabel>Chapter text</FieldLabel>
@@ -1070,7 +1183,12 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
                                     ? "Autosave failed — use Save & analyze below"
                                     : saveState === "dirty"
                                       ? "Saving soon…"
-                                      : "Edits save automatically"}
+                                      : "Text autosaves · use Save & analyze for memory"}
+                              {grammarChecking
+                                ? " · Checking grammar…"
+                                : writingIssues.length > 0
+                                  ? ` · ${writingIssues.length} grammar issue${writingIssues.length === 1 ? "" : "s"}`
+                                  : null}
                             </>
                           ) : sceneText.trim() ? (
                             "Draft kept on this device until you submit"
@@ -1079,11 +1197,21 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
                           )}
                         </span>
                       </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Blue underlines are grammar/spelling. Right-click an
+                        underline to apply a fix or dismiss (dismissed issues
+                        stay hidden after refresh).
+                      </p>
+                      {grammarCheckError ? (
+                        <p className="text-[11px] text-destructive">
+                          {grammarCheckError}
+                        </p>
+                      ) : null}
                       <SceneTextEditor
                         ref={sceneEditorRef}
                         required
                         value={sceneText}
-                        focusedIssueKey={focusedWritingIssueKey}
+                        claimFocusSpan={claimFocusSpan}
                         onChange={(value) => {
                           const prev = sceneTextRef.current;
                           sceneTextRef.current = value;
@@ -1096,10 +1224,10 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
                             ),
                           );
                         }}
-                        issues={
-                          rightPanelTab === "writing" ? writingIssues : []
-                        }
-                        onIssueClick={focusWritingIssue}
+                        issues={writingIssues}
+                        onApplySuggestion={applyWritingSuggestion}
+                        onDismissIssue={dismissWritingIssue}
+                        suggestionsDisabled={sceneDisabled}
                         disabled={sceneDisabled}
                         placeholder="What happens in this chapter?"
                         className={sceneTextareaClass}
@@ -1108,36 +1236,77 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
                   </div>
 
                   {!isWritingFocus ? (
-                  <div>
-                    <FieldLabel>Detected story memory</FieldLabel>
+                  <div className="rounded-lg border border-border/60 bg-muted/15 px-4 py-3">
+                    <FieldLabel>Story memory</FieldLabel>
                     {lastExtraction ? (
-                      <p className="mb-3 mt-1 text-xs text-muted-foreground">
-                        Found {lastExtraction.claim_count} claim
-                        {lastExtraction.claim_count === 1 ? "" : "s"} (
-                        {lastExtraction.approved_count} in canon,{" "}
-                        {lastExtraction.needs_review_count} to review) via{" "}
-                        {lastExtraction.source}.
-                        {lastExtraction.word_count > 3000
-                          ? " Long chapter — processed in multiple sections."
-                          : null}
+                      <p
+                        className={cn(
+                          "mt-1 text-xs leading-5",
+                          lastExtraction.error
+                            ? "text-destructive"
+                            : lastExtraction.claim_count === 0
+                              ? "text-amber-200/90"
+                              : "text-muted-foreground",
+                        )}
+                      >
+                        {lastExtraction.error ? (
+                          <>
+                            <strong className="font-medium">Extraction failed:</strong>{" "}
+                            {lastExtraction.error}
+                          </>
+                        ) : lastExtraction.claim_count === 0 ? (
+                          <>
+                            Analysis ran ({lastExtraction.source}) but found no
+                            claims. Try richer prose with clear character facts.
+                          </>
+                        ) : (
+                          <>
+                            {lastExtraction.claim_count} claim
+                            {lastExtraction.claim_count === 1 ? "" : "s"} detected
+                            — review in{" "}
+                            <strong className="font-medium text-foreground">
+                              New claims
+                            </strong>{" "}
+                            on the right (
+                            {lastExtraction.needs_review_count} to review,{" "}
+                            {lastExtraction.suggested_count} suggested,{" "}
+                            {lastExtraction.approved_count} auto-approved).
+                          </>
+                        )}
                       </p>
+                    ) : analyzeStatus ? (
+                      <p className="mt-1 text-xs text-sky-200/90">{analyzeStatus}</p>
                     ) : (
-                      <p className="mb-3 mt-1 text-xs leading-5 text-muted-foreground">
-                        High-confidence facts enter canon automatically. Medium
-                        confidence appears for your review.
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        Autosave saves text only. Use{" "}
+                        <strong className="font-medium text-foreground">
+                          Save &amp; analyze memory
+                        </strong>{" "}
+                        below, then open{" "}
+                        <strong className="font-medium text-foreground">
+                          New claims
+                        </strong>{" "}
+                        in the right panel to approve or reject.
                       </p>
                     )}
-                    <DetectedStoryMemory
-                      claims={claims.filter((c) => c.status !== "rejected")}
-                      disabled={sceneDisabled}
-                      onApprove={(id) => void onClaimApprove(id)}
-                      onReject={(id) => void onClaimReject(id)}
-                    />
+                    {claims.length > 0 ? (
+                      <p className="mt-2 text-[11px] text-muted-foreground">
+                        {(() => {
+                          const n = claimBucketCounts(claims);
+                          return `${n.new} new · ${n.accepted} accepted · ${n.rejected} rejected`;
+                        })()}
+                      </p>
+                    ) : null}
+                    {lastExtraction ? (
+                      <div className="mt-3">
+                        <ExtractionDebugPanel extraction={lastExtraction} />
+                      </div>
+                    ) : null}
                   </div>
                   ) : (
                     <p className="text-xs text-muted-foreground">
-                      Story memory is hidden in focus mode. Exit focus to review
-                      detected claims.
+                      Story memory summary is hidden in focus mode. Open the right
+                      panel to review claims.
                     </p>
                   )}
 
@@ -1149,7 +1318,7 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
                   >
                     {busy ? (
                       <>
-                        <Spinner /> Saving chapter…
+                        <Spinner /> {analyzeStatus ?? "Analyzing chapter…"}
                       </>
                     ) : isEditingScene ? (
                       "Save & analyze memory"
@@ -1176,17 +1345,15 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
               style={{ ["--panel-w" as string]: `${rightWidth}px` }}
             >
               <WorkspaceRightPanel
+                ref={rightPanelRef}
                 storyLoading={storyLoading}
                 busy={busy}
-                chapterText={sceneText}
                 chapterDisabled={sceneDisabled}
-                writingIssues={writingIssues}
-                onWritingIssuesChange={setWritingIssues}
-                onApplyWritingSuggestion={applyWritingSuggestion}
-                focusedWritingIssueKey={focusedWritingIssueKey}
-                onWritingIssueSelect={focusWritingIssue}
-                activeTab={rightPanelTab}
-                onTabChange={setRightPanelTab}
+                claims={claims}
+                focusedClaimId={focusedClaimId}
+                onClaimSelect={focusClaimInText}
+                onClaimApprove={(id) => void onClaimApprove(id)}
+                onClaimReject={(id) => void onClaimReject(id)}
                 continuityIssues={issues}
                 continuityLoading={issuesLoading}
                 continuityLoadedAt={issuesLoadedAt}

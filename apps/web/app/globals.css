@@ -410,6 +410,10 @@ html.dark .account-panel {
   min-height: 0;
 }
 
+.right-panel-accordion {
+  background: color-mix(in srgb, var(--card) 55%, transparent);
+}
+
 .writing-review-panel__scroll {
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -419,6 +423,10 @@ html.dark .account-panel {
   border-color: color-mix(in srgb, var(--primary) 65%, transparent);
   background: color-mix(in srgb, var(--primary) 12%, var(--card));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.writing-issue-menu {
+  backdrop-filter: blur(12px);
 }
 
 .workspace-edge-tab {
@@ -477,6 +485,12 @@ html.dark .account-panel {
   text-decoration-color: rgb(125 211 252);
   text-decoration-thickness: 3px;
   background: color-mix(in srgb, rgb(56 189 248) 22%, transparent);
+  border-radius: 2px;
+}
+
+.scene-text-editor__claim-focus {
+  background: color-mix(in srgb, rgb(251 191 36) 28%, transparent);
+  box-shadow: inset 0 -2px 0 rgb(251 191 36);
   border-radius: 2px;
 }
 

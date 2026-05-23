@@ -8,13 +8,20 @@ export type SceneSaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 type Snapshot = {
   sceneNumber: number;
   sceneText: string;
+  povCharacter: string;
 };
+
+function normalizePov(pov: string): string | null {
+  const trimmed = pov.trim();
+  return trimmed || null;
+}
 
 export function useSceneAutosave({
   storyId,
   sceneId,
   sceneNumber,
   sceneText,
+  povCharacter,
   enabled,
   debounceMs = 2000,
 }: {
@@ -22,6 +29,7 @@ export function useSceneAutosave({
   sceneId: number | null;
   sceneNumber: number;
   sceneText: string;
+  povCharacter: string;
   enabled: boolean;
   debounceMs?: number;
 }): {
@@ -44,12 +52,17 @@ export function useSceneAutosave({
     const trimmed = sceneText.trim();
     if (!trimmed) return;
 
-    const snapshot: Snapshot = { sceneNumber, sceneText: trimmed };
+    const snapshot: Snapshot = {
+      sceneNumber,
+      sceneText: trimmed,
+      povCharacter: povCharacter.trim(),
+    };
     const prev = lastPersisted.current;
     if (
       prev &&
       prev.sceneNumber === snapshot.sceneNumber &&
-      prev.sceneText === snapshot.sceneText
+      prev.sceneText === snapshot.sceneText &&
+      prev.povCharacter === snapshot.povCharacter
     ) {
       return;
     }
@@ -62,6 +75,7 @@ export function useSceneAutosave({
           await updateScene(storyId, sceneId, {
             scene_number: snapshot.sceneNumber,
             text: snapshot.sceneText,
+            pov_character: normalizePov(snapshot.povCharacter),
             claims: [],
             run_extraction: false,
           });
@@ -80,6 +94,7 @@ export function useSceneAutosave({
     sceneId,
     sceneNumber,
     sceneText,
+    povCharacter,
     enabled,
     debounceMs,
   ]);

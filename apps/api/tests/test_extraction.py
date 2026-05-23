@@ -26,8 +26,17 @@ def test_status_for_confidence():
 def test_heuristic_extract_trust():
     text = "Asha trusts Rohan in the moonlit hall."
     result = extract_claims_from_text(text)
-    assert result.source == "heuristic"
+    assert result.source in ("heuristic", "hybrid")
     assert any("trust" in c.claim.lower() for c in result.claims)
+    assert result.duration_ms >= 0
+    assert len(result.chunks) >= 1
+
+
+def test_structural_entities_and_interaction():
+    text = "Nahira looked at Ashan on the beach in Goa."
+    result = extract_claims_from_text(text)
+    assert result.structural_entity_count >= 2
+    assert any("Nahira" in e or "Ashan" in e for c in result.chunks for e in c.entities)
 
 
 def test_auto_extract_on_scene_save(client):

@@ -34,6 +34,8 @@ def _extraction_summary(result: ExtractionResult, rows: list[Claim]) -> SceneExt
     needs_review = sum(1 for r in rows if r.status == "needs_review")
     suggested = sum(1 for r in rows if r.status == "suggested")
     approved = sum(1 for r in rows if r.status == "approved")
+    from app.schemas import ChunkExtractionDebugOut
+
     return SceneExtractionOut(
         source=result.source,
         chunk_count=result.chunk_count,
@@ -42,6 +44,25 @@ def _extraction_summary(result: ExtractionResult, rows: list[Claim]) -> SceneExt
         approved_count=approved,
         needs_review_count=needs_review,
         suggested_count=suggested,
+        error=result.error,
+        duration_ms=result.duration_ms,
+        openai_attempted=result.openai_attempted,
+        fallback_used=result.fallback_used,
+        large_chapter_warning=result.large_chapter_warning,
+        structural_entity_count=result.structural_entity_count,
+        chunks=[
+            ChunkExtractionDebugOut(
+                chunk_index=c.chunk_index,
+                word_count=c.word_count,
+                openai_attempted=c.openai_attempted,
+                openai_ok=c.openai_ok,
+                fallback_used=c.fallback_used,
+                structural_claims=c.structural_claims,
+                llm_claims=c.llm_claims,
+                entities=c.entities,
+            )
+            for c in result.chunks
+        ],
     )
 
 
@@ -74,7 +95,9 @@ def save_scene_with_extraction(
     extraction_out: SceneExtractionOut | None = None
     extracted_rows: list[Claim] = []
     if run_extraction and scene.text.strip():
-        result = extract_claims_from_text(scene.text)
+        result = extract_claims_from_text(
+            scene.text, pov_character=scene.pov_character
+        )
         extracted_rows = replace_extracted_claims_for_scene(db, scene, result.claims)
         extraction_out = _extraction_summary(result, extracted_rows)
 

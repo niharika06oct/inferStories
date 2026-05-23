@@ -1,196 +1,137 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { forwardRef, useImperativeHandle, useState } from "react";
 import { Badge, Button, Spinner, cn } from "./ui";
-import {
-  WritingReviewPanel,
-  type WritingReviewPanelHandle,
-} from "./WritingReviewPanel";
-import type { ValidationIssueOut } from "../lib/api";
-import type { WritingIssue } from "../lib/grammarCheck";
+import { ClaimsReviewPanel } from "./ClaimsReviewPanel";
+import { RightPanelAccordionRow } from "./RightPanelAccordion";
+import type { ClaimOut, ValidationIssueOut } from "../lib/api";
+import { claimBucketCounts } from "../lib/claimBuckets";
 
-export type RightPanelTab = "writing" | "continuity";
+export type RightPanelSection =
+  | "continuity"
+  | "newClaims"
+  | "acceptedClaims"
+  | "rejectedClaims";
+
+export type WorkspaceRightPanelHandle = {
+  expandSection: (section: RightPanelSection) => void;
+};
 
 type WorkspaceRightPanelProps = {
   storyLoading: boolean;
   busy: boolean;
-  chapterText: string;
   chapterDisabled: boolean;
-  writingIssues: WritingIssue[];
-  onWritingIssuesChange: (issues: WritingIssue[]) => void;
-  onApplyWritingSuggestion?: (
-    issue: WritingIssue,
-    replacement: string,
-  ) => void;
-  focusedWritingIssueKey?: string | null;
-  onWritingIssueSelect?: (issue: WritingIssue) => void;
-  activeTab: RightPanelTab;
-  onTabChange: (tab: RightPanelTab) => void;
+  claims: ClaimOut[];
+  focusedClaimId?: number | null;
+  onClaimSelect?: (claim: ClaimOut) => void;
+  onClaimApprove: (claimId: number) => void;
+  onClaimReject: (claimId: number) => void;
   continuityIssues: ValidationIssueOut[];
   continuityLoading: boolean;
   continuityLoadedAt: string | null;
   onRefreshContinuity: () => void;
 };
 
-function PanelTab({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={cn(
-        "flex-1 rounded-md px-2 py-2 text-xs font-medium leading-snug transition-colors",
-        active
-          ? "bg-card text-foreground shadow-sm"
-          : "text-muted-foreground hover:bg-card/50 hover:text-foreground",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
+export const WorkspaceRightPanel = forwardRef<
+  WorkspaceRightPanelHandle,
+  WorkspaceRightPanelProps
+>(function WorkspaceRightPanel(
+  {
+    storyLoading,
+    busy,
+    chapterDisabled,
+    claims,
+    focusedClaimId,
+    onClaimSelect,
+    onClaimApprove,
+    onClaimReject,
+    continuityIssues,
+    continuityLoading,
+    continuityLoadedAt,
+    onRefreshContinuity,
+  },
+  ref,
+) {
+  const [expandedSection, setExpandedSection] =
+    useState<RightPanelSection | null>(null);
 
-export function WorkspaceRightPanel({
-  storyLoading,
-  busy,
-  chapterText,
-  chapterDisabled,
-  writingIssues,
-  onWritingIssuesChange,
-  onApplyWritingSuggestion,
-  focusedWritingIssueKey,
-  onWritingIssueSelect,
-  activeTab,
-  onTabChange,
-  continuityIssues,
-  continuityLoading,
-  continuityLoadedAt,
-  onRefreshContinuity,
-}: WorkspaceRightPanelProps) {
-  const writingRef = useRef<WritingReviewPanelHandle>(null);
-  const [writingReviewing, setWritingReviewing] = useState(false);
-  const [grammarLoadedAt, setGrammarLoadedAt] = useState<string | null>(null);
+  useImperativeHandle(ref, () => ({
+    expandSection(section: RightPanelSection) {
+      setExpandedSection(section);
+    },
+  }));
 
   const refreshDisabled = storyLoading || busy || chapterDisabled;
+  const counts = claimBucketCounts(claims);
 
-  async function onRefreshClick() {
-    if (activeTab === "writing") {
-      setWritingReviewing(true);
-      try {
-        await writingRef.current?.runReview();
-      } finally {
-        setWritingReviewing(false);
-      }
-    } else {
-      onRefreshContinuity();
-    }
+  function toggle(section: RightPanelSection) {
+    setExpandedSection((prev) => (prev === section ? null : section));
   }
 
-  const loadedAt =
-    activeTab === "writing" ? grammarLoadedAt : continuityLoadedAt;
-
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="shrink-0 border-b border-border bg-secondary/30 px-3 py-2">
-        <div
-          role="tablist"
-          aria-label="Right panel"
-          className="flex gap-1 rounded-lg bg-muted/50 p-1"
-        >
-          <PanelTab
-            active={activeTab === "writing"}
-            onClick={() => onTabChange("writing")}
-          >
-            Review grammar & spelling
-          </PanelTab>
-          <PanelTab
-            active={activeTab === "continuity"}
-            onClick={() => onTabChange("continuity")}
-          >
-            Continuity
-          </PanelTab>
-        </div>
+    <div className="right-panel-accordion flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="shrink-0 border-b border-border px-3 py-2.5">
+        <p className="text-xs font-medium text-foreground">Chapter checks</p>
+        <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+          Expand a section below. Only one stays open at a time.
+        </p>
       </div>
 
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-secondary/40 px-4 py-3">
-        <div className="min-w-0">
-          <h2 className="text-base font-semibold text-secondary-foreground">
-            {activeTab === "writing" ? "Grammar & spelling" : "Continuity"}
-          </h2>
-          <p className="text-xs text-muted-foreground">
-            {activeTab === "writing"
-              ? "Refresh to check this chapter"
-              : "Refresh to load the latest checks"}
-          </p>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={refreshDisabled || writingReviewing}
-          onClick={() => void onRefreshClick()}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <RightPanelAccordionRow
+          id="continuity"
+          title="Continuity"
+          description="Contradictions vs earlier chapters"
+          count={continuityIssues.length}
+          expanded={expandedSection === "continuity"}
+          onToggle={() => toggle("continuity")}
         >
-          {writingReviewing ? (
-            <>
-              <Spinner /> Reviewing…
-            </>
-          ) : (
-            "Refresh"
-          )}
-        </Button>
-      </div>
-
-      <div className="flex h-0 min-h-0 flex-1 flex-col overflow-hidden">
-        {activeTab === "writing" ? (
-          <WritingReviewPanel
-            ref={writingRef}
-            text={chapterText}
-            disabled={refreshDisabled}
-            issues={writingIssues}
-            focusedIssueKey={focusedWritingIssueKey}
-            onIssuesChange={onWritingIssuesChange}
-            onReviewedAt={setGrammarLoadedAt}
-            onApplySuggestion={onApplyWritingSuggestion}
-            onIssueSelect={onWritingIssueSelect}
-          />
-        ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
+          <div className="border-b border-border/60 bg-secondary/25 px-3 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] text-muted-foreground">
+                {continuityLoadedAt
+                  ? `Updated ${new Date(continuityLoadedAt).toLocaleTimeString()}`
+                  : "Click Refresh to load"}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={refreshDisabled || continuityLoading}
+                onClick={onRefreshContinuity}
+              >
+                {continuityLoading ? (
+                  <>
+                    <Spinner /> …
+                  </>
+                ) : (
+                  "Refresh"
+                )}
+              </Button>
+            </div>
+          </div>
+          <div className="max-h-[min(36vh,18rem)] overflow-y-auto overscroll-contain p-3">
             {storyLoading ? (
               <p className="text-sm text-muted-foreground">Loading…</p>
             ) : continuityLoading && continuityIssues.length === 0 ? (
-              <div className="space-y-3">
-                {[1, 2, 3].map((n) => (
+              <div className="space-y-2">
+                {[1, 2].map((n) => (
                   <div
                     key={n}
-                    className="h-16 animate-pulse rounded-lg bg-muted"
+                    className="h-14 animate-pulse rounded-lg bg-muted"
                   />
                 ))}
               </div>
             ) : continuityIssues.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border bg-muted/30 px-4 py-8 text-center">
-                <p className="text-sm font-medium text-foreground">
-                  No issues yet
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Contradictions show up when a new chapter conflicts with
-                  earlier claims.
-                </p>
-              </div>
+              <p className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-6 text-center text-sm text-muted-foreground">
+                No continuity issues yet.
+              </p>
             ) : (
-              <ul className="space-y-3">
+              <ul className="space-y-2">
                 {continuityIssues.map((iss) => (
                   <li
                     key={iss.id}
-                    className="rounded-lg border border-border bg-background p-3 shadow-sm"
+                    className="rounded-lg border border-border bg-background/60 p-3"
                   >
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge
@@ -201,24 +142,84 @@ export function WorkspaceRightPanel({
                         {iss.severity}
                       </Badge>
                       <span className="text-xs text-muted-foreground">
-                        Chapter {iss.scene_number}
+                        Ch. {iss.scene_number}
                       </span>
                     </div>
-                    <p className="mt-2 text-sm leading-6 text-foreground">
-                      {iss.message}
-                    </p>
+                    <p className="mt-2 text-sm leading-6">{iss.message}</p>
                   </li>
                 ))}
               </ul>
             )}
           </div>
-        )}
-        {loadedAt ? (
-          <p className="shrink-0 border-t border-border py-2 text-center text-xs text-muted-foreground">
-            Updated {new Date(loadedAt).toLocaleTimeString()}
-          </p>
-        ) : null}
+        </RightPanelAccordionRow>
+
+        <RightPanelAccordionRow
+          id="new-claims"
+          title="New claims"
+          description="Needs your approve or reject"
+          count={counts.new}
+          expanded={expandedSection === "newClaims"}
+          onToggle={() => toggle("newClaims")}
+        >
+          <div
+            className={cn(
+              "max-h-[min(40vh,20rem)] overflow-y-auto overscroll-contain",
+            )}
+          >
+            <ClaimsReviewPanel
+              bucket="new"
+              claims={claims}
+              disabled={chapterDisabled}
+              focusedClaimId={focusedClaimId}
+              onClaimSelect={onClaimSelect}
+              onApprove={onClaimApprove}
+              onReject={onClaimReject}
+            />
+          </div>
+        </RightPanelAccordionRow>
+
+        <RightPanelAccordionRow
+          id="accepted-claims"
+          title="Accepted claims"
+          description="Approved story memory for this chapter"
+          count={counts.accepted}
+          expanded={expandedSection === "acceptedClaims"}
+          onToggle={() => toggle("acceptedClaims")}
+        >
+          <div className="max-h-[min(36vh,18rem)] overflow-y-auto overscroll-contain">
+            <ClaimsReviewPanel
+              bucket="accepted"
+              claims={claims}
+              disabled={chapterDisabled}
+              focusedClaimId={focusedClaimId}
+              onClaimSelect={onClaimSelect}
+              onApprove={onClaimApprove}
+              onReject={onClaimReject}
+            />
+          </div>
+        </RightPanelAccordionRow>
+
+        <RightPanelAccordionRow
+          id="rejected-claims"
+          title="Rejected claims"
+          description="Hidden from review until you open this section"
+          count={counts.rejected}
+          expanded={expandedSection === "rejectedClaims"}
+          onToggle={() => toggle("rejectedClaims")}
+        >
+          <div className="max-h-[min(32vh,16rem)] overflow-y-auto overscroll-contain">
+            <ClaimsReviewPanel
+              bucket="rejected"
+              claims={claims}
+              disabled={chapterDisabled}
+              focusedClaimId={focusedClaimId}
+              onClaimSelect={onClaimSelect}
+              onApprove={onClaimApprove}
+              onReject={onClaimReject}
+            />
+          </div>
+        </RightPanelAccordionRow>
       </div>
     </div>
   );
-}
+});

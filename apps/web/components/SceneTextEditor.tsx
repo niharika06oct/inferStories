@@ -7,8 +7,10 @@ import {
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import { cn } from "./ui";
+import type { TextSpan } from "../lib/claimEvidenceSpan";
 import type { WritingIssue } from "../lib/grammarCheck";
 import { findIssueAtOffset, issueKey } from "../lib/applyWritingSuggestion";
 import {
@@ -17,18 +19,22 @@ import {
   syncContainerScrollFromTextarea,
   syncTextareaScrollFromContainer,
 } from "../lib/scrollTextareaToRange";
-import { buildHighlightSegments } from "../lib/writingHighlight";
+import { buildEditorHighlightSegments } from "../lib/writingHighlight";
+import { WritingIssueContextMenu } from "./WritingIssueContextMenu";
 
 export type SceneTextEditorHandle = {
   scrollToIssue: (issue: WritingIssue) => void;
+  scrollToRange: (start: number, end: number) => void;
 };
 
 type SceneTextEditorProps = {
   value: string;
   onChange: (value: string) => void;
   issues: WritingIssue[];
-  focusedIssueKey?: string | null;
-  onIssueClick?: (issue: WritingIssue) => void;
+  claimFocusSpan?: TextSpan | null;
+  onApplySuggestion?: (issue: WritingIssue, replacement: string) => void;
+  onDismissIssue?: (issue: WritingIssue) => void;
+  suggestionsDisabled?: boolean;
   disabled?: boolean;
   required?: boolean;
   placeholder?: string;
@@ -54,8 +60,10 @@ export const SceneTextEditor = forwardRef<
     value,
     onChange,
     issues,
-    focusedIssueKey,
-    onIssueClick,
+    claimFocusSpan,
+    onApplySuggestion,
+    onDismissIssue,
+    suggestionsDisabled,
     disabled,
     required,
     placeholder,
@@ -66,19 +74,19 @@ export const SceneTextEditor = forwardRef<
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const issueMarkRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const claimMarkRef = useRef<HTMLElement | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    issue: WritingIssue;
+    x: number;
+    y: number;
+  } | null>(null);
 
   const segments = useMemo(
-    () => buildHighlightSegments(value, issues),
-    [value, issues],
+    () => buildEditorHighlightSegments(value, issues, claimFocusSpan),
+    [value, issues, claimFocusSpan],
   );
 
-  const activeIssue = useMemo(
-    () =>
-      focusedIssueKey
-        ? issues.find((item) => issueKey(item) === focusedIssueKey)
-        : null,
-    [focusedIssueKey, issues],
-  );
+  const menuIssueKey = contextMenu ? issueKey(contextMenu.issue) : null;
 
   useEffect(() => {
     const valid = new Set(issues.map((item) => issueKey(item)));
@@ -95,29 +103,22 @@ export const SceneTextEditor = forwardRef<
     backdrop.scrollLeft = ta.scrollLeft;
   }, []);
 
-  const scrollToIssue = useCallback(
-    (issue: WritingIssue) => {
+  const scrollToRange = useCallback(
+    (start: number, end: number, backdropAnchor?: HTMLElement | null) => {
       const ta = textareaRef.current;
       const backdrop = backdropRef.current;
       if (!ta) return;
 
-      const start = issue.offset;
-      const end = issue.offset + issue.length;
-      const key = issueKey(issue);
-
       const apply = () => {
-        const anchor = issueMarkRefs.current.get(key);
         ta.focus();
         ta.setSelectionRange(start, end);
-
-        if (anchor && backdrop) {
-          scrollElementIntoContainer(backdrop, anchor);
+        if (backdropAnchor && backdrop) {
+          scrollElementIntoContainer(backdrop, backdropAnchor);
           syncTextareaScrollFromContainer(ta, backdrop);
         } else {
           scrollTextareaToRange(ta, start, end);
           if (backdrop) syncContainerScrollFromTextarea(backdrop, ta);
         }
-
         ta.scrollIntoView({ block: "center", behavior: "auto" });
       };
 
@@ -127,7 +128,42 @@ export const SceneTextEditor = forwardRef<
     [],
   );
 
-  useImperativeHandle(ref, () => ({ scrollToIssue }), [scrollToIssue]);
+  const scrollToIssue = useCallback(
+    (issue: WritingIssue) => {
+      const key = issueKey(issue);
+      scrollToRange(
+        issue.offset,
+        issue.offset + issue.length,
+        issueMarkRefs.current.get(key),
+      );
+    },
+    [scrollToRange],
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({ scrollToIssue, scrollToRange }),
+    [scrollToIssue, scrollToRange],
+  );
+
+  useEffect(() => {
+    if (!claimFocusSpan) {
+      claimMarkRef.current = null;
+      return;
+    }
+    requestAnimationFrame(() => {
+      scrollToRange(
+        claimFocusSpan.offset,
+        claimFocusSpan.offset + claimFocusSpan.length,
+        claimMarkRef.current,
+      );
+    });
+  }, [claimFocusSpan, scrollToRange]);
+
+  function openContextMenu(issue: WritingIssue, clientX: number, clientY: number) {
+    setContextMenu({ issue, x: clientX, y: clientY });
+    scrollToIssue(issue);
+  }
 
   return (
     <div
@@ -158,20 +194,27 @@ export const SceneTextEditor = forwardRef<
                 cursor += seg.text.length;
                 const segEnd = cursor;
                 const isActive =
-                  !!activeIssue &&
+                  !!menuIssueKey &&
                   seg.issue &&
-                  segmentOverlapsIssue(segStart, segEnd, activeIssue);
+                  issues.some(
+                    (item) =>
+                      issueKey(item) === menuIssueKey &&
+                      segmentOverlapsIssue(segStart, segEnd, item),
+                  );
                 const overlappingIssues = seg.issue
                   ? issues.filter((item) =>
                       segmentOverlapsIssue(segStart, segEnd, item),
                     )
                   : [];
 
-                if (seg.issue) {
+                if (seg.issue || seg.claimFocus) {
                   return (
                     <mark
                       key={i}
                       ref={(node) => {
+                        if (seg.claimFocus) {
+                          claimMarkRef.current = node;
+                        }
                         for (const item of overlappingIssues) {
                           const k = issueKey(item);
                           if (node) issueMarkRefs.current.set(k, node);
@@ -179,8 +222,10 @@ export const SceneTextEditor = forwardRef<
                         }
                       }}
                       className={cn(
-                        "scene-text-editor__issue text-inherit",
+                        "text-inherit",
+                        seg.issue && "scene-text-editor__issue",
                         isActive && "scene-text-editor__issue--active",
+                        seg.claimFocus && "scene-text-editor__claim-focus",
                       )}
                     >
                       {seg.text}
@@ -205,13 +250,14 @@ export const SceneTextEditor = forwardRef<
         spellCheck
         lang="en"
         onChange={(e) => onChange(e.target.value)}
-        onClick={(e) => {
-          if (!onIssueClick || issues.length === 0) return;
-          const issue = findIssueAtOffset(
-            issues,
-            e.currentTarget.selectionStart,
-          );
-          if (issue) onIssueClick(issue);
+        onContextMenu={(e) => {
+          if (!onApplySuggestion && !onDismissIssue) return;
+          const offset =
+            e.currentTarget.selectionStart ?? e.currentTarget.selectionEnd;
+          const issue = findIssueAtOffset(issues, offset);
+          if (!issue) return;
+          e.preventDefault();
+          openContextMenu(issue, e.clientX, e.clientY);
         }}
         onScroll={syncScroll}
         className={cn(
@@ -224,6 +270,17 @@ export const SceneTextEditor = forwardRef<
           innerClass,
         )}
       />
+      {contextMenu && onApplySuggestion && onDismissIssue ? (
+        <WritingIssueContextMenu
+          issue={contextMenu.issue}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          disabled={suggestionsDisabled}
+          onApply={onApplySuggestion}
+          onDismiss={onDismissIssue}
+          onClose={() => setContextMenu(null)}
+        />
+      ) : null}
     </div>
   );
 });

@@ -7,6 +7,8 @@ export type WritingIssue = {
   matchedText: string;
   replacements: string[];
   type: string;
+  /** LanguageTool rule id — used to remember dismiss/apply across refreshes. */
+  ruleId?: string;
 };
 
 type LanguageToolMatch = {
@@ -15,7 +17,7 @@ type LanguageToolMatch = {
   offset: number;
   length: number;
   replacements?: { value: string }[];
-  rule?: { issueType?: string };
+  rule?: { id?: string; issueType?: string };
 };
 
 export async function checkWriting(text: string): Promise<WritingIssue[]> {
@@ -39,6 +41,7 @@ export async function checkWriting(text: string): Promise<WritingIssue[]> {
     matchedText: text.slice(m.offset, m.offset + m.length),
     replacements: (m.replacements ?? []).map((r) => r.value).slice(0, 5),
     type: m.rule?.issueType ?? "issue",
+    ruleId: m.rule?.id,
   }));
 }
 
