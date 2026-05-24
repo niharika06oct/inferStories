@@ -67,11 +67,13 @@ def upgrade() -> None:
     ).fetchall()
 
     if claim_rows:
+        from sqlalchemy.orm import sessionmaker
+
         from app.claim_entities import resolve_manual
         from app.entity_registry import infer_predicate_from_claim
-        from app.database import SessionLocal
 
-        db = SessionLocal()
+        # Use the migration connection so backfill sees uncommitted DDL.
+        db = sessionmaker(bind=conn, autoflush=False, autocommit=False)()
         try:
             entity_cache: dict[tuple[int, str], int] = {}
 
@@ -111,9 +113,6 @@ def upgrade() -> None:
                         ct, claim_text or f"{subject} {predicate} {obj}"
                     )
 
-                subj_id = entity_id(story_id, subject or "")
-                obj_id = entity_id(story_id, obj or "") if (obj or "").strip() else None
-
                 resolved = resolve_manual(
                     db,
                     story_id,
@@ -136,7 +135,7 @@ def upgrade() -> None:
                         "id": row_id,
                     },
                 )
-            db.commit()
+            db.flush()
         finally:
             db.close()
 
