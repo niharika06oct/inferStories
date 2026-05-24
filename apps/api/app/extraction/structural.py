@@ -88,6 +88,7 @@ _VERB_TO_PREDICATE: dict[str, str] = {
     "told": "tells",
     "asked": "asks",
     "whispered": "whispers_to",
+    "half-brother": "is_half_brother_of",
 }
 
 # pattern, claim_tpl, claim_type, confidence
@@ -116,10 +117,19 @@ _RELATION_PATTERNS: list[tuple[str, str, str, float]] = [
         "event",
         0.5,
     ),
+    (
+        r"(?<![\"\w])(\w+(?:\s+\w+)?)\s+is\s+the\s+half-brother\s+of\s+(\w+(?:\s+\w+)?)",
+        r"\1 is the half-brother of \2.",
+        "relationship_state",
+        0.72,
+    ),
 ]
 
 
 def _predicate_from_match(m: re.Match[str]) -> str:
+    full = m.group(0).lower()
+    if "half-brother" in full or "half brother" in full:
+        return "is_half_brother_of"
     raw = (m.groupdict().get("verb") or "").strip().lower()
     if not raw:
         return "relates_to"
@@ -161,7 +171,9 @@ def structural_extract_chunk(
             subj = resolve_narrator_subject(m.group(1).strip(), pov_character)
             if not subj:
                 continue
-            tgt = m.group(3).strip() if m.lastindex and m.lastindex >= 3 else ""
+            tgt = ""
+            if m.lastindex and m.lastindex >= 2:
+                tgt = m.group(m.lastindex).strip()
             if tgt.lower() in _SKIP_NAMES:
                 continue
             if subj.lower() in _SKIP_NAMES:
