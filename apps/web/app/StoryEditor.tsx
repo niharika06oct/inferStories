@@ -696,7 +696,7 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
       <header className="glass-panel flex h-14 shrink-0 items-center justify-between border-b border-border/60 px-4 lg:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <Link
-            href="/"
+            href="/library"
             className="shrink-0 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
             ← Library
