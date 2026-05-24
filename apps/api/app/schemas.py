@@ -50,6 +50,18 @@ class ClaimIn(BaseModel):
     evidence_text: Optional[str] = None
 
 
+class EntityOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    story_id: int
+    canonical_name: str
+    entity_type: str
+    aliases: list[str] = Field(default_factory=list)
+    description: Optional[str] = None
+    created_at: datetime
+
+
 class ClaimOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -57,6 +69,8 @@ class ClaimOut(BaseModel):
     subject: str
     predicate: str
     object: str
+    subject_entity_id: Optional[int] = None
+    object_entity_id: Optional[int] = None
     is_major_plotline: bool
     claim_type: Optional[str] = None
     claim_text: Optional[str] = None

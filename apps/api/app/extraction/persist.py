@@ -4,12 +4,8 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.claim_identity import (
-    PRESERVED_STATUSES,
-    REPLACABLE_STATUSES,
-    compute_source_hash,
-    source_hash_for_claim_row,
-)
+from app.claim_entities import resolve_extracted, rehash_claim_row
+from app.claim_identity import PRESERVED_STATUSES, REPLACABLE_STATUSES
 from app.extraction.extract import status_for_confidence
 from app.extraction.schema import ExtractedClaim
 from app.models import Claim, Scene
@@ -20,7 +16,7 @@ def _claim_to_row(
     scene_id: int,
     extracted: ExtractedClaim,
     *,
-    source_hash: str,
+    resolved,
 ) -> Claim:
     status = status_for_confidence(extracted.confidence)
     target = (extracted.target or "").strip()
@@ -28,10 +24,12 @@ def _claim_to_row(
     return Claim(
         story_id=story_id,
         scene_id=scene_id,
-        subject=extracted.subject.strip(),
-        predicate=extracted.claim_type,
-        claim_object=target or extracted.claim[:255],
-        claim_type=extracted.claim_type,
+        subject=resolved.subject,
+        predicate=resolved.predicate,
+        claim_object=resolved.claim_object,
+        subject_entity_id=resolved.subject_entity_id,
+        object_entity_id=resolved.object_entity_id,
+        claim_type=resolved.claim_type,
         claim_text=extracted.claim.strip(),
         confidence=extracted.confidence,
         canon_level=extracted.canon_level,
@@ -40,7 +38,7 @@ def _claim_to_row(
         chunk_index=extracted.chunk_index,
         source="extracted",
         is_major_plotline=is_plotline or extracted.canon_level == "core",
-        source_hash=source_hash,
+        source_hash=resolved.source_hash,
         claim_version=1,
     )
 
@@ -49,18 +47,21 @@ def _apply_extraction_to_row(
     row: Claim,
     extracted: ExtractedClaim,
     *,
+    resolved,
     preserve_status: bool,
 ) -> None:
-    target = (extracted.target or "").strip()
-    row.subject = extracted.subject.strip()
-    row.predicate = extracted.claim_type
-    row.claim_object = target or extracted.claim[:255]
-    row.claim_type = extracted.claim_type
+    row.subject = resolved.subject
+    row.predicate = resolved.predicate
+    row.claim_object = resolved.claim_object
+    row.subject_entity_id = resolved.subject_entity_id
+    row.object_entity_id = resolved.object_entity_id
+    row.claim_type = resolved.claim_type
     row.claim_text = extracted.claim.strip()
     row.confidence = extracted.confidence
     row.canon_level = extracted.canon_level
     row.evidence_text = extracted.evidence.strip()
     row.chunk_index = extracted.chunk_index
+    row.source_hash = resolved.source_hash
     row.is_major_plotline = (
         extracted.claim_type == "plotline_fact" or extracted.canon_level == "core"
     )
@@ -91,12 +92,7 @@ def _preserved_by_hash(db: Session, scene: Scene) -> dict[str, Claim]:
     )
     out: dict[str, Claim] = {}
     for row in rows:
-        h = row.source_hash or source_hash_for_claim_row(
-            row.subject,
-            row.predicate,
-            row.claim_object,
-            row.claim_type,
-        )
+        h = row.source_hash or rehash_claim_row(row)
         row.source_hash = h
         out[h] = row
     return out
@@ -108,7 +104,7 @@ def merge_extracted_claims_for_scene(
     extracted_claims: list[ExtractedClaim],
 ) -> list[Claim]:
     """
-    Upsert extracted claims by source_hash.
+    Upsert extracted claims by source_hash (entity-aware).
 
     - Approved/canonized rows with the same hash are updated in place (version++).
     - New hashes insert new rows.
@@ -116,21 +112,23 @@ def merge_extracted_claims_for_scene(
     """
     preserved = _preserved_by_hash(db, scene)
     touched: list[Claim] = []
+    version_bumped: set[str] = set()
 
     for item in extracted_claims:
-        h = compute_source_hash(
-            item.subject,
-            item.claim_type,
-            item.target or "",
-        )
+        resolved = resolve_extracted(db, scene.story_id, item)
+        h = resolved.source_hash
         existing = preserved.get(h)
         if existing is not None:
-            _apply_extraction_to_row(existing, item, preserve_status=True)
-            existing.claim_version = (existing.claim_version or 1) + 1
+            _apply_extraction_to_row(
+                existing, item, resolved=resolved, preserve_status=True
+            )
+            if h not in version_bumped:
+                existing.claim_version = (existing.claim_version or 1) + 1
+                version_bumped.add(h)
             touched.append(existing)
             continue
 
-        row = _claim_to_row(scene.story_id, scene.id, item, source_hash=h)
+        row = _claim_to_row(scene.story_id, scene.id, item, resolved=resolved)
         db.add(row)
         touched.append(row)
         preserved[h] = row

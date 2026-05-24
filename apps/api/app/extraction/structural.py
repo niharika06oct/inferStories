@@ -71,33 +71,64 @@ _NAME_RE = re.compile(
     r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b",
 )
 
-# (?<![\"\\w]) avoids matching inside words or after an opening quote context
+_VERB_TO_PREDICATE: dict[str, str] = {
+    "trusts": "trusts",
+    "trusted": "trusts",
+    "distrusts": "distrusts",
+    "distrusted": "distrusts",
+    "loves": "loves",
+    "loved": "loves",
+    "hates": "hates",
+    "hated": "hates",
+    "looked": "looks_at",
+    "watched": "watches",
+    "stared": "stares_at",
+    "glanced": "glances_at",
+    "said": "speaks_with",
+    "told": "tells",
+    "asked": "asks",
+    "whispered": "whispers_to",
+}
+
+# pattern, claim_tpl, claim_type, confidence
 _RELATION_PATTERNS: list[tuple[str, str, str, float]] = [
     (
-        r"(?<![\"\w])(\w+(?:\s+\w+)?)\s+(?:looked at|watched|stared at|glanced at)\s+(\w+(?:\s+\w+)?)",
+        r"(?<![\"\w])(\w+(?:\s+\w+)?)\s+(?P<verb>looked at|watched|stared at|glanced at)\s+(\w+(?:\s+\w+)?)",
         r"\1 interacts with \2 in this scene.",
         "relationship_state",
         0.52,
     ),
     (
-        r"(?<![\"\w])(I)\s+(?:trusts|trusted|distrusts|distrusted|loves|loved|hates|hated)\s+(\w+(?:\s+\w+)?)",
+        r"(?<![\"\w])(I)\s+(?P<verb>trusts|trusted|distrusts|distrusted|loves|loved|hates|hated)\s+(\w+(?:\s+\w+)?)",
         r"\1 has a strong emotional stance toward \2.",
         "relationship_state",
         0.62,
     ),
     (
-        r"(?<![\"\w])(\w+(?:\s+\w+)?)\s+(?:trusts|trusted|distrusts|distrusted|loves|loved|hates|hated)\s+(\w+(?:\s+\w+)?)",
+        r"(?<![\"\w])(\w+(?:\s+\w+)?)\s+(?P<verb>trusts|trusted|distrusts|distrusted|loves|loved|hates|hated)\s+(\w+(?:\s+\w+)?)",
         r"\1 has a strong emotional stance toward \2.",
         "relationship_state",
         0.58,
     ),
     (
-        r"(?<![\"\w])(\w+(?:\s+\w+)?)\s+(?:said to|told|asked|whispered to)\s+(\w+(?:\s+\w+)?)",
+        r"(?<![\"\w])(\w+(?:\s+\w+)?)\s+(?P<verb>said to|told|asked|whispered to)\s+(\w+(?:\s+\w+)?)",
         r"\1 speaks with \2.",
         "event",
         0.5,
     ),
 ]
+
+
+def _predicate_from_match(m: re.Match[str]) -> str:
+    raw = (m.groupdict().get("verb") or "").strip().lower()
+    if not raw:
+        return "relates_to"
+    token = raw.split()[0]
+    if raw in _VERB_TO_PREDICATE:
+        return _VERB_TO_PREDICATE[raw]
+    if token in _VERB_TO_PREDICATE:
+        return _VERB_TO_PREDICATE[token]
+    return raw.replace(" ", "_")
 
 
 def detect_entities(text: str, *, limit: int = 24) -> list[str]:
@@ -130,7 +161,7 @@ def structural_extract_chunk(
             subj = resolve_narrator_subject(m.group(1).strip(), pov_character)
             if not subj:
                 continue
-            tgt = m.group(2).strip() if m.lastindex and m.lastindex >= 2 else ""
+            tgt = m.group(3).strip() if m.lastindex and m.lastindex >= 3 else ""
             if tgt.lower() in _SKIP_NAMES:
                 continue
             if subj.lower() in _SKIP_NAMES:
@@ -140,6 +171,7 @@ def structural_extract_chunk(
                 ExtractedClaim(
                     subject=subj,
                     claim_type=claim_type,
+                    predicate=_predicate_from_match(m),
                     target=tgt,
                     claim=claim_sentence,
                     confidence=conf,

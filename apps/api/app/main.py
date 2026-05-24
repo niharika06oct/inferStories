@@ -12,12 +12,14 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.auth import AuthUser, get_current_user
 from app.database import get_db
-from app.models import Claim, Scene, Story, ValidationIssue
+from app.models import Claim, Entity, Scene, Story, ValidationIssue
 from app.ai_description import generate_story_description
-from app.claim_helpers import claim_to_out
+from app.claim_entities import resolve_manual, rehash_claim_row
+from app.claim_helpers import _aliases_for_out, claim_to_out
 from app.schemas import (
     ClaimOut,
     ClaimStatusUpdate,
+    EntityOut,
     SceneCreate,
     SceneDetailOut,
     SceneOut,
@@ -218,6 +220,33 @@ def generate_story_description_endpoint(
     story.description = description
     db.commit()
     return StoryDescriptionOut(description=description, source=source)
+
+
+@app.get("/stories/{story_id}/entities", response_model=list[EntityOut])
+def list_story_entities(
+    story_id: int,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    _story_for_user(db, story_id, user)
+    rows = (
+        db.query(Entity)
+        .filter(Entity.story_id == story_id)
+        .order_by(Entity.canonical_name)
+        .all()
+    )
+    return [
+        EntityOut(
+            id=e.id,
+            story_id=e.story_id,
+            canonical_name=e.canonical_name,
+            entity_type=e.entity_type,
+            aliases=_aliases_for_out(e.aliases),
+            description=e.description,
+            created_at=e.created_at,
+        )
+        for e in rows
+    ]
 
 
 @app.get("/stories/{story_id}/scenes", response_model=list[SceneSummaryOut])
@@ -429,14 +458,21 @@ def update_claim_status(
     if payload.target is not None:
         claim.claim_object = payload.target.strip()
 
-    from app.claim_identity import source_hash_for_claim_row
-
-    claim.source_hash = source_hash_for_claim_row(
-        claim.subject,
-        claim.predicate,
-        claim.claim_object,
-        claim.claim_type,
+    resolved = resolve_manual(
+        db,
+        story_id,
+        subject=claim.subject,
+        predicate=claim.predicate,
+        claim_object=claim.claim_object,
+        claim_type=claim.claim_type,
+        claim_text=claim.claim_text,
     )
+    claim.subject = resolved.subject
+    claim.predicate = resolved.predicate
+    claim.claim_object = resolved.claim_object
+    claim.subject_entity_id = resolved.subject_entity_id
+    claim.object_entity_id = resolved.object_entity_id
+    claim.source_hash = rehash_claim_row(claim)
 
     scene = db.get(Scene, scene_id)
     if scene:

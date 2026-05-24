@@ -40,6 +40,7 @@ Return JSON:
     {{
       "subject": "Character name",
       "claim_type": "relationship_state",
+      "predicate": "Semantic verb e.g. distrusts, trusts, loves (not the claim_type slug)",
       "target": "Other character or entity",
       "claim": "Full sentence describing the fact.",
       "confidence": 0.0-1.0,
@@ -69,10 +70,11 @@ def status_for_confidence(confidence: float) -> str:
 def _heuristic_extract_chunk(text: str, chunk_index: int) -> list[ExtractedClaim]:
     """Lightweight pattern extraction when no API key (dev/tests)."""
     found: list[ExtractedClaim] = []
-    patterns: list[tuple[str, str, str, str, float]] = [
+    patterns: list[tuple[str, str, str, str, str, float]] = [
         (
             r"(\w+(?:\s+\w+)?)\s+(?:still\s+)?did not fully trust\s+(\w+(?:\s+\w+)?)",
             "relationship_state",
+            "distrusts",
             "active",
             r"\1 does not fully trust \2.",
             0.88,
@@ -80,6 +82,7 @@ def _heuristic_extract_chunk(text: str, chunk_index: int) -> list[ExtractedClaim
         (
             r"(\w+(?:\s+\w+)?)\s+(?:knew|believed)\s+(?:that\s+)?(\w+(?:\s+\w+)?)\s+would never hurt",
             "character_state",
+            "believes",
             "active",
             r"\1 believes \2 will not hurt her.",
             0.85,
@@ -87,6 +90,7 @@ def _heuristic_extract_chunk(text: str, chunk_index: int) -> list[ExtractedClaim
         (
             r"(\w+(?:\s+\w+)?)\s+trusts\s+(\w+(?:\s+\w+)?)",
             "relationship_state",
+            "trusts",
             "active",
             r"\1 trusts \2.",
             0.9,
@@ -94,6 +98,7 @@ def _heuristic_extract_chunk(text: str, chunk_index: int) -> list[ExtractedClaim
         (
             r"(\w+(?:\s+\w+)?)\s+(?:does not trust|distrusts)\s+(\w+(?:\s+\w+)?)",
             "relationship_state",
+            "distrusts",
             "active",
             r"\1 distrusts \2.",
             0.88,
@@ -101,12 +106,13 @@ def _heuristic_extract_chunk(text: str, chunk_index: int) -> list[ExtractedClaim
         (
             r"(\w+(?:\s+\w+)?)\s+cannot be killed",
             "world_rule",
+            "cannot_be_killed",
             "core",
             r"\1 cannot be killed.",
             0.92,
         ),
     ]
-    for pattern, claim_type, canon, claim_tpl, conf in patterns:
+    for pattern, claim_type, predicate, canon, claim_tpl, conf in patterns:
         for m in re.finditer(pattern, text, re.IGNORECASE):
             subj = m.group(1).strip()
             tgt = m.group(2).strip() if m.lastindex and m.lastindex >= 2 else ""
@@ -116,6 +122,7 @@ def _heuristic_extract_chunk(text: str, chunk_index: int) -> list[ExtractedClaim
                 ExtractedClaim(
                     subject=subj,
                     claim_type=claim_type,
+                    predicate=predicate,
                     target=tgt,
                     claim=claim_sentence,
                     confidence=conf,
@@ -259,6 +266,7 @@ def _dedupe_claims(claims: list[ExtractedClaim]) -> list[ExtractedClaim]:
         key = (
             c.subject.strip().lower(),
             c.claim_type.strip().lower(),
+            (c.predicate or "").strip().lower(),
             (c.target or "").strip().lower(),
             c.claim.strip().lower()[:120],
         )

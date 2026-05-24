@@ -19,6 +19,28 @@ class Story(Base):
     scenes: Mapped[list["Scene"]] = relationship(
         back_populates="story", cascade="all, delete-orphan"
     )
+    entities: Mapped[list["Entity"]] = relationship(
+        back_populates="story", cascade="all, delete-orphan"
+    )
+
+
+class Entity(Base):
+    __tablename__ = "entities"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    story_id: Mapped[int] = mapped_column(
+        ForeignKey("stories.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    canonical_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    entity_type: Mapped[str] = mapped_column(
+        String(32), default="character", nullable=False
+    )
+    aliases: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    story: Mapped["Story"] = relationship(back_populates="entities")
 
 
 class Scene(Base):
@@ -60,6 +82,16 @@ class Claim(Base):
     predicate: Mapped[str] = mapped_column(String(255), nullable=False)
     # Column name "object" in SQL; avoid shadowing Python builtin `object`.
     claim_object: Mapped[str] = mapped_column("object", String(255), nullable=False)
+    subject_entity_id: Mapped[int | None] = mapped_column(
+        ForeignKey("entities.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    object_entity_id: Mapped[int | None] = mapped_column(
+        ForeignKey("entities.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
     is_major_plotline: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )

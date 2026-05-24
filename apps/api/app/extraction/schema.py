@@ -25,6 +25,11 @@ CanonLevel = Literal["core", "active", "soft"]
 class ExtractedClaim(BaseModel):
     subject: str = Field(min_length=1, max_length=255)
     claim_type: str = Field(min_length=1, max_length=64)
+    predicate: str = Field(
+        default="",
+        max_length=64,
+        description="Semantic relation verb (e.g. distrusts), not claim_type slug",
+    )
     target: str = Field(default="", max_length=255)
     claim: str = Field(min_length=1)
     confidence: float = Field(ge=0.0, le=1.0)

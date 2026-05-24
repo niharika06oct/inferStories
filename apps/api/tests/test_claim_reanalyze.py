@@ -4,6 +4,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.claim_entities import resolve_extracted
 from app.claim_identity import compute_source_hash, source_hash_for_claim_row
 from app.database import Base
 from app.extraction.persist import (
@@ -87,18 +88,34 @@ def test_merge_updates_same_hash_in_place():
         db.add(scene)
         db.flush()
 
-        h = compute_source_hash("Asha", "relationship_state", "Rohan")
+        resolved = resolve_extracted(
+            db,
+            story.id,
+            ExtractedClaim(
+                subject="Asha",
+                claim_type="relationship_state",
+                predicate="trusts",
+                target="Rohan",
+                claim="Asha trusts Rohan.",
+                confidence=0.95,
+                canon_level="active",
+                evidence="Asha trusts Rohan.",
+                chunk_index=0,
+            ),
+        )
         approved = Claim(
             story_id=story.id,
             scene_id=scene.id,
-            subject="Asha",
-            predicate="relationship_state",
-            claim_object="Rohan",
-            claim_type="relationship_state",
+            subject=resolved.subject,
+            predicate=resolved.predicate,
+            claim_object=resolved.claim_object,
+            subject_entity_id=resolved.subject_entity_id,
+            object_entity_id=resolved.object_entity_id,
+            claim_type=resolved.claim_type,
             claim_text="Asha trusts Rohan.",
             status="approved",
             source="extracted",
-            source_hash=h,
+            source_hash=resolved.source_hash,
             claim_version=1,
             confidence=0.95,
         )
@@ -115,6 +132,7 @@ def test_merge_updates_same_hash_in_place():
                 ExtractedClaim(
                     subject="Asha",
                     claim_type="relationship_state",
+                    predicate="trusts",
                     target="Rohan",
                     claim="Asha trusts Rohan deeply.",
                     confidence=0.92,

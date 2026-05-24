@@ -11,32 +11,43 @@ from app.extraction.persist import (
     merge_extracted_claims_for_scene,
 )
 from app.extraction.schema import ExtractionResult
-from app.claim_identity import source_hash_for_claim_row
+from app.claim_entities import resolve_manual
+from app.entity_registry import ensure_pov_entity
 from app.models import Claim, Scene, ValidationIssue
 from app.schemas import ClaimIn, SceneExtractionOut
 from app.validation import validate_scene_claims
 
 
-def _manual_claim_row(story_id: int, scene_id: int, c: ClaimIn) -> Claim:
-    subject = c.subject.strip()
-    predicate = c.predicate.strip()
-    obj = c.object.strip()
-    claim_type = c.claim_type or predicate
+def _manual_claim_row(
+    db: Session, story_id: int, scene_id: int, c: ClaimIn
+) -> Claim:
+    resolved = resolve_manual(
+        db,
+        story_id,
+        subject=c.subject,
+        predicate=c.predicate,
+        claim_object=c.object,
+        claim_type=c.claim_type,
+        claim_text=c.claim_text,
+    )
     return Claim(
         story_id=story_id,
         scene_id=scene_id,
-        subject=subject,
-        predicate=predicate,
-        claim_object=obj,
-        claim_type=claim_type,
-        claim_text=c.claim_text or f"{subject} {predicate} {obj}".strip(),
+        subject=resolved.subject,
+        predicate=resolved.predicate,
+        claim_object=resolved.claim_object,
+        subject_entity_id=resolved.subject_entity_id,
+        object_entity_id=resolved.object_entity_id,
+        claim_type=resolved.claim_type,
+        claim_text=c.claim_text
+        or f"{resolved.subject} {resolved.predicate} {resolved.claim_object}".strip(),
         confidence=c.confidence if c.confidence is not None else 1.0,
         canon_level=c.canon_level or "active",
         status="approved",
         evidence_text=c.evidence_text,
         source="manual",
         is_major_plotline=c.is_major_plotline,
-        source_hash=source_hash_for_claim_row(subject, predicate, obj, claim_type),
+        source_hash=resolved.source_hash,
         claim_version=1,
     )
 
@@ -103,12 +114,13 @@ def save_scene_with_extraction(
         for c in manual_claims:
             if not c.subject.strip() or not c.predicate.strip() or not c.object.strip():
                 continue
-            db.add(_manual_claim_row(scene.story_id, scene.id, c))
+            db.add(_manual_claim_row(db, scene.story_id, scene.id, c))
 
     db.flush()
 
     extraction_out: SceneExtractionOut | None = None
     if run_extraction and scene.text.strip():
+        ensure_pov_entity(db, scene.story_id, scene.pov_character)
         delete_replaceable_scene_claims(db, scene)
         result = extract_claims_from_text(
             scene.text, pov_character=scene.pov_character

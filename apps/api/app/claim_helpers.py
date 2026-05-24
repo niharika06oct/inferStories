@@ -1,5 +1,19 @@
+import json
+
 from app.models import Claim
 from app.schemas import ClaimOut
+
+
+def _aliases_for_out(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(a) for a in parsed]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return []
 
 
 def claim_to_out(c: Claim) -> ClaimOut:
@@ -8,6 +22,8 @@ def claim_to_out(c: Claim) -> ClaimOut:
         subject=c.subject,
         predicate=c.predicate,
         object=c.claim_object,
+        subject_entity_id=c.subject_entity_id,
+        object_entity_id=c.object_entity_id,
         is_major_plotline=c.is_major_plotline,
         claim_type=c.claim_type or c.predicate,
         claim_text=c.claim_text,
