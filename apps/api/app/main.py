@@ -429,6 +429,15 @@ def update_claim_status(
     if payload.target is not None:
         claim.claim_object = payload.target.strip()
 
+    from app.claim_identity import source_hash_for_claim_row
+
+    claim.source_hash = source_hash_for_claim_row(
+        claim.subject,
+        claim.predicate,
+        claim.claim_object,
+        claim.claim_type,
+    )
+
     scene = db.get(Scene, scene_id)
     if scene:
         db.query(ValidationIssue).filter(ValidationIssue.scene_id == scene.id).delete(

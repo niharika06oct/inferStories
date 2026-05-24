@@ -112,6 +112,9 @@ export type ClaimOut = {
   evidence_text?: string | null;
   source: string;
   chunk_index?: number | null;
+  claim_version?: number;
+  superseded_by_claim_id?: number | null;
+  source_hash?: string | null;
 };
 
 export type ChunkExtractionDebugOut = {

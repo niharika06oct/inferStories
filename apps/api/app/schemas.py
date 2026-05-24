@@ -67,6 +67,9 @@ class ClaimOut(BaseModel):
     evidence_text: Optional[str] = None
     source: str = "manual"
     chunk_index: Optional[int] = None
+    claim_version: int = 1
+    superseded_by_claim_id: Optional[int] = None
+    source_hash: Optional[str] = None
 
 
 class ClaimStatusUpdate(BaseModel):

@@ -12,7 +12,9 @@ export function filterClaimsByBucket(
         (c) => c.status === "needs_review" || c.status === "suggested",
       );
     case "accepted":
-      return claims.filter((c) => c.status === "approved");
+      return claims.filter(
+        (c) => c.status === "approved" || c.status === "canonized",
+      );
     case "rejected":
       return claims.filter((c) => c.status === "rejected");
   }

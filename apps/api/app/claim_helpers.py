@@ -21,4 +21,7 @@ def claim_to_out(c: Claim) -> ClaimOut:
         evidence_text=c.evidence_text,
         source=c.source,
         chunk_index=c.chunk_index,
+        claim_version=c.claim_version,
+        superseded_by_claim_id=c.superseded_by_claim_id,
+        source_hash=c.source_hash,
     )

@@ -75,6 +75,12 @@ class Claim(Base):
     evidence_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)
+    claim_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    superseded_by_claim_id: Mapped[int | None] = mapped_column(
+        ForeignKey("claims.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_hash: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
     scene: Mapped["Scene"] = relationship(back_populates="claims")
 
 
