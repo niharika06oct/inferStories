@@ -1,6 +1,7 @@
 "use client";
 
 import type { SceneExtractionOut } from "../lib/api";
+import { formatGenerationBreakdown } from "../lib/formatExtractionSummary";
 
 type ExtractionDebugPanelProps = {
   extraction: SceneExtractionOut;
@@ -30,6 +31,18 @@ export function ExtractionDebugPanel({ extraction }: ExtractionDebugPanelProps) 
           <dd>{extraction.fallback_used ? "Yes" : "No"}</dd>
           <dt>Entities (structural)</dt>
           <dd>{extraction.structural_entity_count ?? 0}</dd>
+          {(extraction.suppressed_structural_count ?? 0) > 0 ? (
+            <>
+              <dt>Duplicates dropped</dt>
+              <dd>{extraction.suppressed_structural_count} rule claim(s) (AI already covered)</dd>
+            </>
+          ) : null}
+          {formatGenerationBreakdown(extraction.generation_counts) ? (
+            <>
+              <dt>By source</dt>
+              <dd>{formatGenerationBreakdown(extraction.generation_counts)}</dd>
+            </>
+          ) : null}
         </dl>
 
         {extraction.large_chapter_warning ? (

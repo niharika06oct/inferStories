@@ -15,6 +15,7 @@ import {
 } from "../components/ui";
 import {
   addScene,
+  deleteScene,
   fetchScene,
   fetchScenes,
   fetchStory,
@@ -23,7 +24,9 @@ import {
   updateClaimStatus,
   updateScene,
   updateStory,
+  updateValidationIssueStatus,
   type ClaimOut,
+  type ContinuityResolutionStatus,
   type SceneExtractionOut,
   type SceneSummaryOut,
   type ValidationIssueOut,
@@ -51,12 +54,21 @@ import {
   type WorkspaceRightPanelHandle,
 } from "../components/WorkspaceRightPanel";
 import { claimBucketCounts } from "../lib/claimBuckets";
+import {
+  extractionEngineLabel,
+  formatGenerationBreakdown,
+} from "../lib/formatExtractionSummary";
 import type { WritingIssue } from "../lib/grammarCheck";
 import {
   applyTextReplacement,
   issuesAfterApply,
 } from "../lib/applyWritingSuggestion";
-import { findClaimEvidenceSpan } from "../lib/claimEvidenceSpan";
+import {
+  findClaimEvidenceSpan,
+  findContinuityAnchorSpan,
+  inferContinuityIssueClaim,
+  type TextSpan,
+} from "../lib/claimEvidenceSpan";
 import { useGrammarCheck } from "../lib/useGrammarCheck";
 import { rememberDismissedWritingIssue } from "../lib/writingDismissedStorage";
 import { writingIssueFingerprint } from "../lib/writingIssueFingerprint";
@@ -67,6 +79,7 @@ import {
   saveSceneDraft,
 } from "../lib/sceneDraftStorage";
 import { useSceneAutosave } from "../lib/useSceneAutosave";
+import { RelationshipGraphView } from "../components/RelationshipGraphView";
 
 function formatErr(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -92,7 +105,7 @@ type StoryEditorProps = {
 export default function StoryEditor({ storyId }: StoryEditorProps) {
   const [scenes, setScenes] = useState<SceneSummaryOut[]>([]);
   const [scenesLoading, setScenesLoading] = useState(false);
-  type CenterView = "story-form" | "scenes";
+  type CenterView = "story-form" | "scenes" | "relationship-graph";
   const [centerView, setCenterView] = useState<CenterView>("scenes");
   const [storyLoading, setStoryLoading] = useState(true);
 
@@ -122,6 +135,12 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
   const [importSceneTitles, setImportSceneTitles] = useState<string[]>([]);
   const [generatingDescription, setGeneratingDescription] = useState(false);
   const [focusedClaimId, setFocusedClaimId] = useState<number | null>(null);
+  const [focusedContinuityIssueId, setFocusedContinuityIssueId] = useState<
+    number | null
+  >(null);
+  const [continuityResolveBusyId, setContinuityResolveBusyId] = useState<
+    number | null
+  >(null);
   const [claimFocusSpan, setClaimFocusSpan] = useState<{
     offset: number;
     length: number;
@@ -130,6 +149,12 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sceneTextRef = useRef(sceneText);
   const sceneEditorRef = useRef<SceneTextEditorHandle>(null);
+  const pendingContinuityScroll = useRef<{
+    sceneId: number;
+    span: TextSpan;
+  } | null>(null);
+  /** Continuity navigation sets scene + highlight together; skip the scene-change clear once. */
+  const preserveClaimFocusOnSceneChange = useRef(false);
   const rightPanelRef = useRef<WorkspaceRightPanelHandle>(null);
   const workspace = useWorkspaceLayout();
   const {
@@ -210,6 +235,7 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
       setError(null);
       try {
         const scene = await fetchScene(storyId, sceneId);
+        setCenterView("scenes");
         setEditingSceneId(scene.id);
         setSceneNumber(scene.scene_number);
         setPovCharacter(scene.pov_character ?? "");
@@ -286,6 +312,27 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
       errorBoxRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
   }, [error]);
+
+  useEffect(() => {
+    const pending = pendingContinuityScroll.current;
+    if (!pending || editingSceneId !== pending.sceneId) return;
+    if (!sceneText) return;
+    if (
+      !claimFocusSpan ||
+      claimFocusSpan.offset !== pending.span.offset ||
+      claimFocusSpan.length !== pending.span.length
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      sceneEditorRef.current?.scrollToRange(
+        pending.span.offset,
+        pending.span.offset + pending.span.length,
+      );
+      pendingContinuityScroll.current = null;
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [editingSceneId, sceneText, claimFocusSpan]);
 
   function cancelImport() {
     setImportDraft(null);
@@ -467,14 +514,23 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
 
   async function onClaimApprove(claimId: number) {
     if (editingSceneId == null) return;
+    const sceneId = editingSceneId;
     setBusy(true);
     try {
-      await updateClaimStatus(storyId, editingSceneId, claimId, {
+      await updateClaimStatus(storyId, sceneId, claimId, {
         status: "approved",
       });
-      await openScene(editingSceneId);
+      await openScene(sceneId);
       await loadIssues();
     } catch (err) {
+      if (formatErr(err).includes("Claim not found")) {
+        await openScene(sceneId);
+        await loadIssues();
+        setError(
+          "That claim was refreshed during re-analysis. I reloaded the chapter; please try the action again.",
+        );
+        return;
+      }
       setError(formatErr(err));
     } finally {
       setBusy(false);
@@ -483,14 +539,23 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
 
   async function onClaimReject(claimId: number) {
     if (editingSceneId == null) return;
+    const sceneId = editingSceneId;
     setBusy(true);
     try {
-      await updateClaimStatus(storyId, editingSceneId, claimId, {
+      await updateClaimStatus(storyId, sceneId, claimId, {
         status: "rejected",
       });
-      await openScene(editingSceneId);
+      await openScene(sceneId);
       await loadIssues();
     } catch (err) {
+      if (formatErr(err).includes("Claim not found")) {
+        await openScene(sceneId);
+        await loadIssues();
+        setError(
+          "That claim was refreshed during re-analysis. I reloaded the chapter; please try the action again.",
+        );
+        return;
+      }
       setError(formatErr(err));
     } finally {
       setBusy(false);
@@ -501,6 +566,13 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
     e.preventDefault();
     if (!sceneText.trim()) {
       setError("Chapter text is required.");
+      return;
+    }
+    const hasFirstPerson = /\b(I|me|my|myself)\b/i.test(sceneText);
+    if (hasFirstPerson && !povCharacter.trim()) {
+      setError(
+        "Set POV character (narrator name) so “I” maps to the right character in extracted claims.",
+      );
       return;
     }
     setBusy(true);
@@ -586,7 +658,12 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
   }, [busy]);
 
   useEffect(() => {
+    if (preserveClaimFocusOnSceneChange.current) {
+      preserveClaimFocusOnSceneChange.current = false;
+      return;
+    }
     setFocusedClaimId(null);
+    setFocusedContinuityIssueId(null);
     setClaimFocusSpan(null);
   }, [editingSceneId]);
 
@@ -610,8 +687,104 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
     [rememberWritingDismissal, setWritingIssues],
   );
 
+  const focusContinuityIssue = useCallback(
+    async (issue: ValidationIssueOut) => {
+      setFocusedContinuityIssueId(issue.id);
+      rightPanelRef.current?.expandSection("continuity");
+      setBusy(true);
+      setError(null);
+      try {
+        const scene = await fetchScene(storyId, issue.scene_id);
+        preserveClaimFocusOnSceneChange.current = scene.id !== editingSceneId;
+        setCenterView("scenes");
+        setEditingSceneId(scene.id);
+        setSceneNumber(scene.scene_number);
+        setPovCharacter(scene.pov_character ?? "");
+        setSceneText(scene.text);
+        setClaims(scene.claims);
+        setLastExtraction(null);
+        markPersisted({
+          sceneNumber: scene.scene_number,
+          sceneText: scene.text.trim(),
+          povCharacter: (scene.pov_character ?? "").trim(),
+        });
+
+        const claim = inferContinuityIssueClaim(issue, scene.claims);
+        const span = findContinuityAnchorSpan(
+          scene.text,
+          issue,
+          claim ?? undefined,
+        );
+        setFocusedClaimId(claim?.id ?? null);
+        setClaimFocusSpan(span);
+        pendingContinuityScroll.current = span
+          ? { sceneId: scene.id, span }
+          : null;
+      } catch (err) {
+        preserveClaimFocusOnSceneChange.current = false;
+        setError(formatErr(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [storyId, editingSceneId, markPersisted],
+  );
+
+  const resolveContinuityIssue = useCallback(
+    async (
+      issue: ValidationIssueOut,
+      status: ContinuityResolutionStatus,
+    ) => {
+      setContinuityResolveBusyId(issue.id);
+      setError(null);
+      try {
+        const updated = await updateValidationIssueStatus(
+          storyId,
+          issue.id,
+          status,
+        );
+        setIssues((prev) =>
+          prev.map((row) => (row.id === updated.id ? updated : row)),
+        );
+      } catch (err) {
+        setError(formatErr(err));
+      } finally {
+        setContinuityResolveBusyId(null);
+      }
+    },
+    [storyId],
+  );
+
+  const deleteChapter = useCallback(
+    async (sceneId: number, sceneNumber: number) => {
+      const ok = window.confirm(
+        `Delete Chapter ${sceneNumber}? This removes its claims and continuity issues. This cannot be undone.`,
+      );
+      if (!ok) return;
+      setBusy(true);
+      setError(null);
+      try {
+        await deleteScene(storyId, sceneId);
+        const sceneList = await loadScenes();
+        if (editingSceneId === sceneId) {
+          resetSceneEditor(sceneList);
+          setFocusedContinuityIssueId(null);
+          setClaimFocusSpan(null);
+        }
+        setIssues((prev) => prev.filter((i) => i.scene_id !== sceneId));
+        await loadIssues();
+      } catch (err) {
+        setError(formatErr(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [storyId, editingSceneId, loadScenes, resetSceneEditor, loadIssues],
+  );
+
   const focusClaimInText = useCallback(
     (claim: ClaimOut) => {
+      setFocusedContinuityIssueId(null);
       const span = findClaimEvidenceSpan(sceneText, claim);
       setFocusedClaimId(claim.id);
       setClaimFocusSpan(span);
@@ -942,11 +1115,26 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
               >
                 <Button
                   type="button"
+                  variant={
+                    centerView === "relationship-graph" ? "default" : "outline"
+                  }
+                  size="sm"
+                  className="mb-2 w-full"
+                  disabled={busy}
+                  onClick={() => setCenterView("relationship-graph")}
+                >
+                  Relationship map
+                </Button>
+                <Button
+                  type="button"
                   variant={editingSceneId == null ? "default" : "outline"}
                   size="sm"
                   className="mb-3 w-full"
                   disabled={busy}
-                  onClick={() => resetSceneEditor(scenes)}
+                  onClick={() => {
+                    setCenterView("scenes");
+                    resetSceneEditor(scenes);
+                  }}
                 >
                   + Write new chapter
                 </Button>
@@ -959,13 +1147,13 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
                 ) : (
                   <ul className="space-y-1.5">
                     {scenes.map((sc) => (
-                      <li key={sc.id}>
+                      <li key={sc.id} className="group relative">
                         <button
                           type="button"
                           disabled={busy}
                           onClick={() => void openScene(sc.id)}
                           className={cn(
-                            "w-full rounded-md border px-2.5 py-2 text-left transition-colors",
+                            "w-full rounded-md border px-2.5 py-2 pr-9 text-left transition-colors",
                             editingSceneId === sc.id
                               ? "border-primary/40 bg-accent shadow-sm"
                               : "border-transparent bg-card hover:border-sidebar-border",
@@ -983,6 +1171,21 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
                             {excerpt(sc.text, 80)}
                           </p>
                         </button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={busy}
+                          title={`Delete Chapter ${sc.scene_number}`}
+                          aria-label={`Delete Chapter ${sc.scene_number}`}
+                          className="absolute right-1 top-1 h-7 w-7 min-w-0 px-0 text-muted-foreground opacity-70 hover:text-destructive group-hover:opacity-100"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void deleteChapter(sc.id, sc.scene_number);
+                          }}
+                        >
+                          ×
+                        </Button>
                       </li>
                     ))}
                   </ul>
@@ -1019,13 +1222,22 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
           <div
             className={cn(
               "mx-auto w-full p-4 lg:p-6",
-              isWritingFocus ? "max-w-none flex-1" : "max-w-3xl",
+              isWritingFocus
+                ? "max-w-none flex-1"
+                : centerView === "relationship-graph"
+                  ? "max-w-6xl"
+                  : "max-w-3xl",
             )}
           >
             {storyLoading ? (
               <p className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
                 <Spinner /> Loading story…
               </p>
+            ) : centerView === "relationship-graph" ? (
+              <RelationshipGraphView
+                storyId={storyId}
+                onBack={() => setCenterView("scenes")}
+              />
             ) : centerView === "story-form" ? (
               <Panel
                 title="Story details"
@@ -1263,7 +1475,14 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
                           <>
                             {lastExtraction.claim_count} claim
                             {lastExtraction.claim_count === 1 ? "" : "s"} detected
-                            — review in{" "}
+                            ({extractionEngineLabel(lastExtraction)}
+                            {(lastExtraction.suppressed_structural_count ?? 0) > 0
+                              ? ` · ${lastExtraction.suppressed_structural_count} duplicate rule claim(s) hidden`
+                              : ""}
+                            {formatGenerationBreakdown(lastExtraction.generation_counts)
+                              ? ` · ${formatGenerationBreakdown(lastExtraction.generation_counts)}`
+                              : ""}
+                            ) — review in{" "}
                             <strong className="font-medium text-foreground">
                               New claims
                             </strong>{" "}
@@ -1271,6 +1490,10 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
                             {lastExtraction.needs_review_count} to review,{" "}
                             {lastExtraction.suggested_count} suggested,{" "}
                             {lastExtraction.approved_count} auto-approved).
+                            <span className="mt-1 block text-[11px] text-muted-foreground/90">
+                              ✓ high · ○ medium · ⚠ low confidence — you approve every
+                              fact.
+                            </span>
                           </>
                         )}
                       </p>
@@ -1358,6 +1581,12 @@ export default function StoryEditor({ storyId }: StoryEditorProps) {
                 continuityLoading={issuesLoading}
                 continuityLoadedAt={issuesLoadedAt}
                 onRefreshContinuity={() => void loadIssues()}
+                focusedContinuityIssueId={focusedContinuityIssueId}
+                onContinuityIssueSelect={(iss) => void focusContinuityIssue(iss)}
+                onContinuityResolve={(iss, status) =>
+                  void resolveContinuityIssue(iss, status)
+                }
+                continuityResolveBusyId={continuityResolveBusyId}
               />
             </aside>
           </div>

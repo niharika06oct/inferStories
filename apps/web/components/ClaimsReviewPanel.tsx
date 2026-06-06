@@ -5,12 +5,25 @@ import { Badge, Button, cn } from "./ui";
 import type { ClaimOut } from "../lib/api";
 import type { ClaimBucket } from "../lib/claimBuckets";
 import { filterClaimsByBucket } from "../lib/claimBuckets";
+import {
+  formatClaimTimestamp,
+  labelForGenerationOrigin,
+} from "../lib/claimGenerationOrigin";
+import {
+  confidenceTier,
+  formatConfidenceLabel,
+} from "../lib/claimConfidence";
 
 const GROUP_ORDER: { key: string; label: string; types: string[] }[] = [
   {
     key: "characters",
     label: "Characters",
-    types: ["character_trait", "character_goal", "character_state"],
+    types: [
+      "character_trait",
+      "character_goal",
+      "character_state",
+      "character_preference",
+    ],
   },
   {
     key: "relationships",
@@ -75,6 +88,15 @@ function ClaimCard({
     claim.claim_text ??
     `${claim.subject} ${claim.predicate}${claim.target ? ` ${claim.target}` : ""}`;
   const showActions = bucket === "new";
+  const originLabel = labelForGenerationOrigin(claim.generation_origin);
+  const extractedWhen = formatClaimTimestamp(claim.extracted_at);
+  const confLabel = formatConfidenceLabel(claim.confidence);
+  const confClass =
+    confidenceTier(claim.confidence) === "high"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : confidenceTier(claim.confidence) === "low"
+        ? "text-amber-600 dark:text-amber-300"
+        : "text-muted-foreground";
 
   return (
     <li
@@ -99,11 +121,22 @@ function ClaimCard({
         <p className="text-sm font-medium leading-snug text-foreground">{text}</p>
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
           {statusBadge(claim)}
-          <span className="text-[10px] text-muted-foreground">
-            {Math.round(claim.confidence * 100)}%
+          <span className={cn("text-[10px] font-medium tabular-nums", confClass)}>
+            {confLabel}
           </span>
         </div>
       </div>
+      <p className="mt-1.5 text-[10px] text-muted-foreground/90">
+        <span className="font-medium text-muted-foreground">{originLabel}</span>
+        {extractedWhen ? (
+          <>
+            {" "}
+            · extracted {extractedWhen}
+          </>
+        ) : claim.generation_origin === "manual" ? (
+          <> · added manually</>
+        ) : null}
+      </p>
       {claim.evidence_text ? (
         <p className="mt-2 text-xs italic leading-5 text-muted-foreground">
           &ldquo;{claim.evidence_text}&rdquo;

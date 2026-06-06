@@ -111,6 +111,10 @@ export type ClaimOut = {
   status: string;
   evidence_text?: string | null;
   source: string;
+  generation_origin?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  extracted_at?: string | null;
   chunk_index?: number | null;
   claim_version?: number;
   superseded_by_claim_id?: number | null;
@@ -142,6 +146,8 @@ export type SceneExtractionOut = {
   fallback_used?: boolean;
   large_chapter_warning?: boolean;
   structural_entity_count?: number;
+  suppressed_structural_count?: number;
+  generation_counts?: Record<string, number>;
   chunks?: ChunkExtractionDebugOut[];
 };
 
@@ -155,6 +161,68 @@ export type SceneDetailOut = {
   claims: ClaimOut[];
 };
 
+export type GraphSupportingClaimOut = {
+  claim_id: number;
+  predicate: string;
+  claim_text: string | null;
+  confidence: number;
+  scene_number: number;
+};
+
+export type RelationshipGraphNodeOut = {
+  id: string;
+  entity_id: number;
+  label: string;
+  type: string;
+  importance_score: number;
+  mention_count: number;
+  relationship_degree: number;
+};
+
+export type RelationshipGraphEdgeOut = {
+  id: string;
+  source: string;
+  target: string;
+  source_entity_id: number;
+  target_entity_id: number;
+  predicate: string;
+  primary_relationship: string;
+  sub_relationships: string[];
+  strength: number;
+  confidence: number;
+  claim_count: number;
+  status: string;
+  supporting_claims: GraphSupportingClaimOut[];
+};
+
+export type RelationshipGraphOut = {
+  story_id: number;
+  nodes: RelationshipGraphNodeOut[];
+  edges: RelationshipGraphEdgeOut[];
+  meta: {
+    canon_statuses: string[];
+    relationship_predicate_count: number;
+    approved_relationship_claim_count?: number;
+    pending_preview_claim_count?: number;
+    include_preview?: boolean;
+  };
+};
+
+export async function fetchRelationshipGraph(
+  storyId: number,
+  options?: { includePreview?: boolean },
+): Promise<RelationshipGraphOut> {
+  const qs = options?.includePreview ? "?include_preview=true" : "";
+  const res = await fetch(
+    `${apiBase()}/stories/${storyId}/relationship-graph${qs}`,
+    { headers: await authHeaders() },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json() as Promise<RelationshipGraphOut>;
+}
+
+export type ContinuityResolutionStatus = "open" | "fixed" | "rejected";
+
 export type ValidationIssueOut = {
   id: number;
   story_id: number;
@@ -163,6 +231,21 @@ export type ValidationIssueOut = {
   severity: string;
   message: string;
   conflicting_claim_id: number | null;
+  conflicting_scene_number?: number | null;
+  current_claim_id?: number | null;
+  text_offset?: number;
+  anchor_text?: string | null;
+  anchor_length?: number;
+  resolution_status?: ContinuityResolutionStatus;
+  judge_source?: "rules" | "ai" | "fallback" | string;
+  judge_classification?:
+    | "hard_contradiction"
+    | "soft_tension"
+    | "compatible_progression"
+    | "not_issue"
+    | string;
+  judge_confidence?: number;
+  judge_reason?: string | null;
   created_at: string;
 };
 
@@ -290,6 +373,34 @@ export async function fetchValidationIssues(
   });
   if (!res.ok) throw new Error(await parseError(res));
   return res.json() as Promise<ValidationIssueOut[]>;
+}
+
+export async function updateValidationIssueStatus(
+  storyId: number,
+  issueId: number,
+  resolution_status: ContinuityResolutionStatus,
+): Promise<ValidationIssueOut> {
+  const res = await fetch(
+    `${apiBase()}/stories/${storyId}/validation-issues/${issueId}`,
+    {
+      method: "PATCH",
+      headers: await authHeaders(),
+      body: JSON.stringify({ resolution_status }),
+    },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json() as Promise<ValidationIssueOut>;
+}
+
+export async function deleteScene(
+  storyId: number,
+  sceneId: number,
+): Promise<void> {
+  const res = await fetch(`${apiBase()}/stories/${storyId}/scenes/${sceneId}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
 }
 
 export async function updateClaimStatus(

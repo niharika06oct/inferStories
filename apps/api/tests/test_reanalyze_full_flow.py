@@ -27,7 +27,7 @@ def test_full_reanalyze_flow(client):
         json={"status": "approved"},
     )
 
-    text_v2 = text_v1 + " Elena glanced at the map on the table."
+    text_v2 = text_v1 + " Marcus distrusts Elena in the hall."
     client.patch(
         f"/stories/{sid}/scenes/{scene_id}",
         json={

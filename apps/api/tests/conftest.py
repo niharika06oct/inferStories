@@ -13,6 +13,13 @@ from app.database import Base, get_db
 from app.main import app
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "desired_behavior: north-star assertions (may xfail until fully implemented)",
+    )
+
+
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SKIP_ALEMBIC_ON_STARTUP", "1")

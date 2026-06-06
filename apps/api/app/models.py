@@ -35,6 +35,10 @@ class Entity(Base):
     entity_type: Mapped[str] = mapped_column(
         String(32), default="character", nullable=False
     )
+    type_confidence: Mapped[float] = mapped_column(default=0.0, nullable=False)
+    graph_eligible: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     aliases: Mapped[str | None] = mapped_column(Text, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -107,6 +111,16 @@ class Claim(Base):
     evidence_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)
+    generation_origin: Mapped[str] = mapped_column(
+        String(20), default="unknown", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+    extracted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     claim_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     superseded_by_claim_id: Mapped[int | None] = mapped_column(
         ForeignKey("claims.id", ondelete="SET NULL"),
@@ -131,7 +145,33 @@ class ValidationIssue(Base):
     conflicting_claim_id: Mapped[int | None] = mapped_column(
         ForeignKey("claims.id"), nullable=True
     )
+    current_claim_id: Mapped[int | None] = mapped_column(
+        ForeignKey("claims.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    text_offset: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    anchor_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    anchor_length: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # open = needs attention; fixed = addressed; rejected = dismissed as non-issue
+    resolution_status: Mapped[str] = mapped_column(
+        String(20), default="open", nullable=False
+    )
+    judge_source: Mapped[str] = mapped_column(
+        String(20), default="rules", nullable=False
+    )
+    judge_classification: Mapped[str] = mapped_column(
+        String(32), default="hard_contradiction", nullable=False
+    )
+    judge_confidence: Mapped[float] = mapped_column(default=1.0, nullable=False)
+    judge_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
     scene: Mapped["Scene"] = relationship(back_populates="issues")
+    conflicting_claim: Mapped["Claim | None"] = relationship(
+        foreign_keys=[conflicting_claim_id],
+    )
+    current_claim: Mapped["Claim | None"] = relationship(
+        foreign_keys=[current_claim_id],
+    )

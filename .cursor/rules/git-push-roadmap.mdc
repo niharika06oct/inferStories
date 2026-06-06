@@ -1,0 +1,14 @@
+---
+description: Include docs/MEGA_SERIES_ROADMAP.md when committing or pushing writers-ai-memory
+alwaysApply: true
+---
+
+# Git push — mega-series roadmap
+
+When the user asks to **commit**, **push**, or create a **pull request** for this repo (`writers-ai-memory` / inferStories):
+
+1. Check `git status` for `docs/MEGA_SERIES_ROADMAP.md`.
+2. If it is untracked or modified, **stage and include it** in the commit unless the user explicitly excludes it.
+3. This file is the living product roadmap (Tier 1–3 mega-series author features); it should stay in version control with the project.
+
+Do not commit unless the user explicitly requests a commit.

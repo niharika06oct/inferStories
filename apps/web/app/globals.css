@@ -1045,3 +1045,141 @@ html.dark .account-panel {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+
+.relationship-graph-shell {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 900px) {
+  .relationship-graph-shell {
+    grid-template-columns: 1fr 240px;
+  }
+}
+
+/* Relationship map — same glass / paper language as the editor */
+.relationship-graph-canvas {
+  --graph-edge-romantic: #b85c4a;
+  --graph-edge-trust: #3d6ea8;
+  --graph-edge-distrust: #8b4a52;
+  --graph-edge-rivalry: #a63d3d;
+  --graph-edge-family: #9a7b2e;
+  --graph-edge-mentorship: #4a7c59;
+  --graph-edge-social: #6b7280;
+
+  position: relative;
+  z-index: 2;
+  isolation: isolate;
+  height: min(68vh, 640px);
+  min-height: 420px;
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--card) 90%, var(--accent));
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  backdrop-filter: blur(12px);
+}
+
+html.dark .relationship-graph-canvas {
+  --graph-edge-romantic: #e08a78;
+  --graph-edge-trust: #7bb6e6;
+  --graph-edge-distrust: #c98a92;
+  --graph-edge-rivalry: #e57373;
+  --graph-edge-family: #d4b86a;
+  --graph-edge-mentorship: #7cb892;
+  --graph-edge-social: #9ca3af;
+
+  box-shadow:
+    0 12px 36px rgba(0, 0, 0, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.relationship-graph-canvas .react-flow {
+  width: 100%;
+  height: 100%;
+}
+
+.relationship-graph-canvas .react-flow__background pattern circle {
+  fill: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+
+.relationship-graph-canvas .react-flow__controls {
+  box-shadow: none;
+}
+
+.relationship-graph-canvas .react-flow__controls-button {
+  background: color-mix(in srgb, var(--card) 95%, white) !important;
+  border: 1px solid var(--border) !important;
+  border-bottom: 1px solid var(--border) !important;
+  color: var(--foreground) !important;
+  fill: var(--foreground) !important;
+  width: 28px;
+  height: 28px;
+}
+
+.relationship-graph-canvas .react-flow__controls-button:hover {
+  background: var(--accent) !important;
+}
+
+.relationship-graph-canvas .react-flow__edge-text {
+  font-family: var(--font-inter), system-ui, sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.relationship-graph-node {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  padding: 6px;
+  text-align: center;
+  line-height: 1.2;
+  font-weight: 600;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--card) 94%, white);
+  border: 2px solid color-mix(in srgb, var(--primary) 45%, var(--border));
+  box-shadow:
+    0 6px 18px rgba(61, 110, 168, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  pointer-events: all;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+html.dark .relationship-graph-node {
+  background: color-mix(in srgb, var(--card) 88%, rgba(30, 35, 42, 0.9));
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.relationship-graph-node:hover {
+  border-color: color-mix(in srgb, var(--primary) 70%, var(--border));
+  box-shadow:
+    0 8px 22px rgba(61, 110, 168, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.relationship-graph-node__label {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.relationship-graph-side {
+  border-radius: var(--radius-card);
+  padding: 0.75rem 1rem;
+}
+
+.relationship-graph-side__item {
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+  padding: 0.5rem 0.65rem;
+}

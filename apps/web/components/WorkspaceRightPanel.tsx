@@ -1,14 +1,28 @@
 "use client";
 
-import { forwardRef, useImperativeHandle, useState } from "react";
-import { Badge, Button, Spinner, cn } from "./ui";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
+import { Button, Spinner, cn } from "./ui";
 import { ClaimsReviewPanel } from "./ClaimsReviewPanel";
+import { ContinuityIssuesList } from "./ContinuityIssuesList";
 import { RightPanelAccordionRow } from "./RightPanelAccordion";
-import type { ClaimOut, ValidationIssueOut } from "../lib/api";
+import type {
+  ContinuityResolutionStatus,
+  ClaimOut,
+  ValidationIssueOut,
+} from "../lib/api";
 import { claimBucketCounts } from "../lib/claimBuckets";
+import { continuityBucketCounts } from "../lib/continuityBuckets";
+import {
+  CONTINUITY_SORT_OPTIONS,
+  loadContinuitySortOrder,
+  saveContinuitySortOrder,
+  sortContinuityIssues,
+  type ContinuitySortOrder,
+} from "../lib/continuitySort";
 
 export type RightPanelSection =
   | "continuity"
+  | "resolvedContinuity"
   | "newClaims"
   | "acceptedClaims"
   | "rejectedClaims";
@@ -30,6 +44,13 @@ type WorkspaceRightPanelProps = {
   continuityLoading: boolean;
   continuityLoadedAt: string | null;
   onRefreshContinuity: () => void;
+  focusedContinuityIssueId?: number | null;
+  onContinuityIssueSelect?: (issue: ValidationIssueOut) => void;
+  onContinuityResolve?: (
+    issue: ValidationIssueOut,
+    status: ContinuityResolutionStatus,
+  ) => void;
+  continuityResolveBusyId?: number | null;
 };
 
 export const WorkspaceRightPanel = forwardRef<
@@ -49,11 +70,40 @@ export const WorkspaceRightPanel = forwardRef<
     continuityLoading,
     continuityLoadedAt,
     onRefreshContinuity,
+    focusedContinuityIssueId,
+    onContinuityIssueSelect,
+    onContinuityResolve,
+    continuityResolveBusyId = null,
   },
   ref,
 ) {
   const [expandedSection, setExpandedSection] =
     useState<RightPanelSection | null>(null);
+  const [continuitySort, setContinuitySort] = useState<ContinuitySortOrder>("text");
+
+  useEffect(() => {
+    setContinuitySort(loadContinuitySortOrder());
+  }, []);
+
+  const continuityCounts = useMemo(
+    () => continuityBucketCounts(continuityIssues),
+    [continuityIssues],
+  );
+
+  const sortedOpenIssues = useMemo(() => {
+    const open = continuityIssues.filter(
+      (i) => (i.resolution_status ?? "open") === "open",
+    );
+    return sortContinuityIssues(open, continuitySort);
+  }, [continuityIssues, continuitySort]);
+
+  const sortedResolvedIssues = useMemo(() => {
+    const resolved = continuityIssues.filter((i) => {
+      const s = i.resolution_status ?? "open";
+      return s === "fixed" || s === "rejected";
+    });
+    return sortContinuityIssues(resolved, continuitySort);
+  }, [continuityIssues, continuitySort]);
 
   useImperativeHandle(ref, () => ({
     expandSection(section: RightPanelSection) {
@@ -68,6 +118,54 @@ export const WorkspaceRightPanel = forwardRef<
     setExpandedSection((prev) => (prev === section ? null : section));
   }
 
+  const continuityToolbar = (
+    <div className="border-b border-border/60 bg-secondary/25 px-3 py-2 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] text-muted-foreground">
+          {continuityLoadedAt
+            ? `Updated ${new Date(continuityLoadedAt).toLocaleTimeString()}`
+            : "Click Refresh to load"}
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={refreshDisabled || continuityLoading}
+          onClick={onRefreshContinuity}
+        >
+          {continuityLoading ? (
+            <>
+              <Spinner /> …
+            </>
+          ) : (
+            "Refresh"
+          )}
+        </Button>
+      </div>
+      <label className="flex flex-col gap-1">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          Sort
+        </span>
+        <select
+          className="rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground"
+          value={continuitySort}
+          disabled={continuityIssues.length === 0}
+          onChange={(e) => {
+            const next = e.target.value as ContinuitySortOrder;
+            setContinuitySort(next);
+            saveContinuitySortOrder(next);
+          }}
+        >
+          {CONTINUITY_SORT_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+
   return (
     <div className="right-panel-accordion flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="shrink-0 border-b border-border px-3 py-2.5">
@@ -81,35 +179,12 @@ export const WorkspaceRightPanel = forwardRef<
         <RightPanelAccordionRow
           id="continuity"
           title="Continuity"
-          description="Contradictions vs earlier chapters"
-          count={continuityIssues.length}
+          description="Open issues — mark fixed or reject when handled"
+          count={continuityCounts.open}
           expanded={expandedSection === "continuity"}
           onToggle={() => toggle("continuity")}
         >
-          <div className="border-b border-border/60 bg-secondary/25 px-3 py-2">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-[11px] text-muted-foreground">
-                {continuityLoadedAt
-                  ? `Updated ${new Date(continuityLoadedAt).toLocaleTimeString()}`
-                  : "Click Refresh to load"}
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={refreshDisabled || continuityLoading}
-                onClick={onRefreshContinuity}
-              >
-                {continuityLoading ? (
-                  <>
-                    <Spinner /> …
-                  </>
-                ) : (
-                  "Refresh"
-                )}
-              </Button>
-            </div>
-          </div>
+          {continuityToolbar}
           <div className="max-h-[min(36vh,18rem)] overflow-y-auto overscroll-contain p-3">
             {storyLoading ? (
               <p className="text-sm text-muted-foreground">Loading…</p>
@@ -122,33 +197,38 @@ export const WorkspaceRightPanel = forwardRef<
                   />
                 ))}
               </div>
-            ) : continuityIssues.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-6 text-center text-sm text-muted-foreground">
-                No continuity issues yet.
-              </p>
             ) : (
-              <ul className="space-y-2">
-                {continuityIssues.map((iss) => (
-                  <li
-                    key={iss.id}
-                    className="rounded-lg border border-border bg-background/60 p-3"
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge
-                        variant={
-                          iss.severity === "high" ? "destructive" : "warning"
-                        }
-                      >
-                        {iss.severity}
-                      </Badge>
-                      <span className="text-xs text-muted-foreground">
-                        Ch. {iss.scene_number}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm leading-6">{iss.message}</p>
-                  </li>
-                ))}
-              </ul>
+              <ContinuityIssuesList
+                issues={sortedOpenIssues}
+                emptyMessage="No open continuity issues."
+                focusedContinuityIssueId={focusedContinuityIssueId}
+                onContinuityIssueSelect={onContinuityIssueSelect}
+                onResolve={onContinuityResolve}
+                showResolveActions={!!onContinuityResolve}
+                resolveBusyId={continuityResolveBusyId}
+              />
+            )}
+          </div>
+        </RightPanelAccordionRow>
+
+        <RightPanelAccordionRow
+          id="resolved-continuity"
+          title="Handled continuity"
+          description="Fixed or rejected — hidden from the open list"
+          count={continuityCounts.resolved}
+          expanded={expandedSection === "resolvedContinuity"}
+          onToggle={() => toggle("resolvedContinuity")}
+        >
+          <div className="max-h-[min(28vh,14rem)] overflow-y-auto overscroll-contain p-3">
+            {storyLoading ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : (
+              <ContinuityIssuesList
+                issues={sortedResolvedIssues}
+                emptyMessage="No handled continuity issues yet."
+                focusedContinuityIssueId={focusedContinuityIssueId}
+                onContinuityIssueSelect={onContinuityIssueSelect}
+              />
             )}
           </div>
         </RightPanelAccordionRow>

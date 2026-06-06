@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.claim_identity import compute_entity_source_hash, source_hash_for_claim_row
+from app.entity_classification import classify_entity_surface, refine_claim_type
 from app.entity_registry import (
     _CLAIM_TYPE_SLUGS,
     get_or_create_entity,
-    guess_entity_type,
     infer_predicate_from_claim,
 )
 from app.extraction.schema import ExtractedClaim
@@ -32,23 +32,58 @@ def resolve_extracted(
     db: Session, story_id: int, extracted: ExtractedClaim
 ) -> ResolvedClaimFields:
     target = (extracted.target or "").strip()
-    claim_type = extracted.claim_type.strip()
+    context = extracted.claim.strip()
+    evidence = extracted.evidence.strip()
+
     predicate = infer_predicate_from_claim(
-        claim_type,
-        extracted.claim,
+        extracted.claim_type,
+        context,
         extracted.predicate,
     )
 
-    subj_type = guess_entity_type(extracted.subject.strip(), claim_type)
-    subj_ent = get_or_create_entity(
-        db, story_id, extracted.subject.strip(), subj_type
+    subj_type, _ = classify_entity_surface(
+        extracted.subject.strip(),
+        sentence=context,
+        evidence=evidence,
+        role="subject",
     )
-    obj_ent = None
-    if target:
-        obj_type = guess_entity_type(target, claim_type)
-        obj_ent = get_or_create_entity(db, story_id, target, obj_type)
+    subj_ent = get_or_create_entity(
+        db,
+        story_id,
+        extracted.subject.strip(),
+        subj_type,
+        sentence=context,
+        evidence=evidence,
+        role="subject",
+    )
 
-    claim_object = target or extracted.claim[:255]
+    obj_ent = None
+    obj_type = None
+    if target:
+        obj_type, _ = classify_entity_surface(
+            target,
+            sentence=context,
+            evidence=evidence,
+            role="object",
+        )
+        obj_ent = get_or_create_entity(
+            db,
+            story_id,
+            target,
+            obj_type,
+            sentence=context,
+            evidence=evidence,
+            role="object",
+        )
+
+    claim_type = refine_claim_type(
+        extracted.claim_type.strip(),
+        predicate,
+        subj_type,
+        obj_type,
+    )
+
+    claim_object = obj_ent.canonical_name if obj_ent else (target or context[:255])
     source_hash = compute_entity_source_hash(
         subj_ent.id,
         predicate,
@@ -58,7 +93,7 @@ def resolve_extracted(
     return ResolvedClaimFields(
         subject=subj_ent.canonical_name,
         predicate=predicate,
-        claim_object=obj_ent.canonical_name if obj_ent else claim_object,
+        claim_object=claim_object,
         claim_type=claim_type,
         subject_entity_id=subj_ent.id,
         object_entity_id=obj_ent.id if obj_ent else None,
@@ -76,22 +111,40 @@ def resolve_manual(
     claim_type: str | None,
     claim_text: str | None,
 ) -> ResolvedClaimFields:
-    ct = (claim_type or "relationship_state").strip()
+    context = (claim_text or f"{subject} {predicate} {claim_object}").strip()
+    ct_in = (claim_type or "relationship_state").strip()
     pred = predicate.strip()
     if pred.lower() in _CLAIM_TYPE_SLUGS:
-        pred = infer_predicate_from_claim(ct, claim_text or f"{subject} {pred} {claim_object}")
+        pred = infer_predicate_from_claim(ct_in, context)
 
-    subj_ent = get_or_create_entity(
-        db, story_id, subject.strip(), guess_entity_type(subject, ct)
+    subj_type, _ = classify_entity_surface(
+        subject.strip(), sentence=context, role="subject"
     )
+    subj_ent = get_or_create_entity(
+        db,
+        story_id,
+        subject.strip(),
+        subj_type,
+        sentence=context,
+        role="subject",
+    )
+
     obj_ent = None
+    obj_type = None
     if claim_object.strip():
+        obj_type, _ = classify_entity_surface(
+            claim_object.strip(), sentence=context, role="object"
+        )
         obj_ent = get_or_create_entity(
             db,
             story_id,
             claim_object.strip(),
-            guess_entity_type(claim_object, ct),
+            obj_type,
+            sentence=context,
+            role="object",
         )
+
+    ct = refine_claim_type(ct_in, pred, subj_type, obj_type)
 
     source_hash = compute_entity_source_hash(
         subj_ent.id,

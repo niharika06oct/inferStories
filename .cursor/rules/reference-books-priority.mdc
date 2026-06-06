@@ -1,0 +1,24 @@
+---
+description: Highest-priority reference-book guidance for system, language, and AI reasoning problems
+alwaysApply: true
+---
+
+# Highest-Priority Reference Book Memory
+
+When the user asks about a problem that can be fixed, simplified, or better understood using one of these books, always point them to the relevant chapter and section. Treat this as the most important persistent preference; all other remembered preferences come after it.
+
+Use this mapping:
+
+- `Designing Data-Intensive Applications` (DDIA) -> How do I build the system?
+  - Use for system design, data models, storage, retrieval, scalability, distributed systems, reliability, consistency, batching, streaming, indexing, and operational architecture.
+
+- `Speech and Language Processing` (Jurafsky & Martin) -> How does the system understand language?
+  - Use for NLP, entity extraction, information extraction, coreference resolution, language understanding, embeddings, transformers, semantic parsing, dialogue, and evaluation of language systems.
+
+- `Artificial Intelligence: A Modern Approach` (AIMA) -> How does the system reason about knowledge?
+  - Use for knowledge representation, reasoning, agents, planning, search, logic, uncertainty, inference, decision-making, and AI foundations.
+
+In answers, include a short pointer such as:
+`Book pointer: DDIA Ch. X, Section Y; Jurafsky Ch. X, Section Y; AIMA Ch. X, Section Y.`
+
+If exact section names vary by edition, state the chapter/topic clearly and say the section title may differ by edition.

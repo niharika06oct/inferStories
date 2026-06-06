@@ -50,8 +50,9 @@ def test_contradiction_flow(client):
     assert r.status_code == 200
     issues = r.json()
     assert len(issues) >= 1
-    assert issues[0]["severity"] == "high"
-    assert "major" in issues[0]["message"].lower()
+    high = [i for i in issues if i["severity"] == "high"]
+    assert high, "expected at least one high-severity continuity issue"
+    assert any("major" in i["message"].lower() for i in high)
     assert issues[0]["story_id"] == story_id
     assert "created_at" in issues[0]
 
@@ -195,3 +196,72 @@ def test_duplicate_scene_number_returns_409(client):
     assert client.post(f"/stories/{sid}/scenes", json=body).status_code == 200
     r2 = client.post(f"/stories/{sid}/scenes", json=body)
     assert r2.status_code == 409
+
+
+def test_delete_scene(client):
+    r = client.post("/stories", json={"title": "Delete chapter"})
+    sid = r.json()["id"]
+    created = client.post(
+        f"/stories/{sid}/scenes",
+        json={
+            "scene_number": 1,
+            "text": "Chapter one.",
+            "claims": [],
+        },
+    )
+    scene_id = created.json()["id"]
+    assert client.delete(f"/stories/{sid}/scenes/{scene_id}").status_code == 204
+    listed = client.get(f"/stories/{sid}/scenes")
+    assert listed.status_code == 200
+    assert listed.json() == []
+    assert client.get(f"/stories/{sid}/scenes/{scene_id}").status_code == 404
+
+
+def test_update_validation_issue_resolution_status(client):
+    r = client.post("/stories", json={"title": "Resolution status"})
+    sid = r.json()["id"]
+    client.post(
+        f"/stories/{sid}/scenes",
+        json={
+            "scene_number": 1,
+            "text": "Asha trusts Rohan.",
+            "claims": [
+                {
+                    "subject": "Asha",
+                    "predicate": "trusts",
+                    "object": "Rohan",
+                    "is_major_plotline": True,
+                }
+            ],
+        },
+    )
+    client.post(
+        f"/stories/{sid}/scenes",
+        json={
+            "scene_number": 2,
+            "text": "Asha does not trust Rohan.",
+            "claims": [
+                {
+                    "subject": "Asha",
+                    "predicate": "trusts",
+                    "object": "Nobody",
+                    "is_major_plotline": True,
+                }
+            ],
+        },
+    )
+    issues = client.post(f"/stories/{sid}/validate").json()
+    assert len(issues) >= 1
+    issue_id = issues[0]["id"]
+    assert issues[0]["resolution_status"] == "open"
+
+    fixed = client.patch(
+        f"/stories/{sid}/validation-issues/{issue_id}",
+        json={"resolution_status": "fixed"},
+    )
+    assert fixed.status_code == 200
+    assert fixed.json()["resolution_status"] == "fixed"
+
+    listed = client.post(f"/stories/{sid}/validate").json()
+    row = next(i for i in listed if i["id"] == issue_id)
+    assert row["resolution_status"] == "fixed"

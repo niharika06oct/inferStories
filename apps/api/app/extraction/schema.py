@@ -10,6 +10,8 @@ CLAIM_TYPES = (
     "character_trait",
     "character_goal",
     "character_state",
+    "character_preference",
+    "place_preference",
     "relationship_state",
     "relationship_change",
     "event",
@@ -20,6 +22,10 @@ CLAIM_TYPES = (
 )
 
 CanonLevel = Literal["core", "active", "soft"]
+
+# How the claim was produced before DB persist (distinct from Claim.source manual/extracted).
+GenerationOrigin = Literal["structural", "family", "llm", "heuristic"]
+GENERATION_ORIGINS: tuple[str, ...] = ("structural", "family", "llm", "heuristic")
 
 
 class ExtractedClaim(BaseModel):
@@ -36,6 +42,10 @@ class ExtractedClaim(BaseModel):
     canon_level: CanonLevel = "active"
     evidence: str = Field(min_length=1, max_length=500)
     chunk_index: int = Field(default=0, ge=0)
+    generation_origin: GenerationOrigin = Field(
+        default="structural",
+        description="Pipeline step that produced this claim (structural, family, llm, heuristic).",
+    )
 
 
 class ChunkExtractionDebug(BaseModel):
@@ -51,6 +61,7 @@ class ChunkExtractionDebug(BaseModel):
 
 class ExtractionResult(BaseModel):
     claims: list[ExtractedClaim] = Field(default_factory=list)
+    suppressed_structural_count: int = 0
     source: str  # openai | heuristic | hybrid
     chunk_count: int = 1
     word_count: int = 0

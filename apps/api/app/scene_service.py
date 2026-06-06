@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -12,7 +14,7 @@ from app.extraction.persist import (
 )
 from app.extraction.schema import ExtractionResult
 from app.claim_entities import resolve_manual
-from app.entity_registry import ensure_pov_entity
+from app.entity_registry import ensure_pov_entity, is_placeholder_entity_name
 from app.models import Claim, Scene, ValidationIssue
 from app.schemas import ClaimIn, SceneExtractionOut
 from app.validation import validate_scene_claims
@@ -30,6 +32,7 @@ def _manual_claim_row(
         claim_type=c.claim_type,
         claim_text=c.claim_text,
     )
+    now = datetime.utcnow()
     return Claim(
         story_id=story_id,
         scene_id=scene_id,
@@ -46,6 +49,10 @@ def _manual_claim_row(
         status="approved",
         evidence_text=c.evidence_text,
         source="manual",
+        generation_origin="manual",
+        created_at=now,
+        updated_at=now,
+        extracted_at=None,
         is_major_plotline=c.is_major_plotline,
         source_hash=resolved.source_hash,
         claim_version=1,
@@ -57,6 +64,11 @@ def _extraction_summary(result: ExtractionResult, rows: list[Claim]) -> SceneExt
     suggested = sum(1 for r in rows if r.status == "suggested")
     approved = sum(1 for r in rows if r.status == "approved")
     from app.schemas import ChunkExtractionDebugOut
+
+    gen_counts: dict[str, int] = {}
+    for r in rows:
+        key = (r.generation_origin or "unknown").strip() or "unknown"
+        gen_counts[key] = gen_counts.get(key, 0) + 1
 
     return SceneExtractionOut(
         source=result.source,
@@ -72,6 +84,8 @@ def _extraction_summary(result: ExtractionResult, rows: list[Claim]) -> SceneExt
         fallback_used=result.fallback_used,
         large_chapter_warning=result.large_chapter_warning,
         structural_entity_count=result.structural_entity_count,
+        suppressed_structural_count=result.suppressed_structural_count,
+        generation_counts=gen_counts,
         chunks=[
             ChunkExtractionDebugOut(
                 chunk_index=c.chunk_index,
@@ -98,8 +112,8 @@ def save_scene_with_extraction(
     """
     Save chapter claims: keep approved/canonized memory on re-analyze, refresh the rest.
 
-    Re-extraction deletes only suggested / needs_review / rejected / deprecated rows,
-    then merges new extractions by source_hash (updates approved matches in place).
+    Re-extraction deletes only suggested / needs_review / deprecated rows,
+    then merges new extractions (updates approved and rejected matches in place).
     """
     db.query(ValidationIssue).filter(ValidationIssue.scene_id == scene.id).delete(
         synchronize_session=False
@@ -113,6 +127,11 @@ def save_scene_with_extraction(
         ).delete(synchronize_session=False)
         for c in manual_claims:
             if not c.subject.strip() or not c.predicate.strip() or not c.object.strip():
+                continue
+            if is_placeholder_entity_name(c.subject) or is_placeholder_entity_name(
+                c.object
+            ):
+                # "I"/"Narrator" cannot be a canonical subject/object; needs a real name.
                 continue
             db.add(_manual_claim_row(db, scene.story_id, scene.id, c))
 

@@ -3,7 +3,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import func
@@ -16,10 +16,12 @@ from app.models import Claim, Entity, Scene, Story, ValidationIssue
 from app.ai_description import generate_story_description
 from app.claim_entities import resolve_manual, rehash_claim_row
 from app.claim_helpers import _aliases_for_out, claim_to_out
+from app.relationship_graph import build_relationship_graph
 from app.schemas import (
     ClaimOut,
     ClaimStatusUpdate,
     EntityOut,
+    RelationshipGraphOut,
     SceneCreate,
     SceneDetailOut,
     SceneOut,
@@ -31,8 +33,35 @@ from app.schemas import (
     StoryOut,
     StoryUpdate,
     ValidationIssueOut,
+    ValidationIssueStatusUpdate,
 )
 from app.scene_service import save_scene_with_extraction
+
+
+def validation_issue_to_out(issue: ValidationIssue) -> ValidationIssueOut:
+    conflicting_scene_number = None
+    if issue.conflicting_claim and issue.conflicting_claim.scene:
+        conflicting_scene_number = issue.conflicting_claim.scene.scene_number
+    return ValidationIssueOut(
+        id=issue.id,
+        story_id=issue.story_id,
+        scene_id=issue.scene_id,
+        scene_number=issue.scene.scene_number,
+        severity=issue.severity,
+        message=issue.message,
+        conflicting_claim_id=issue.conflicting_claim_id,
+        conflicting_scene_number=conflicting_scene_number,
+        current_claim_id=issue.current_claim_id,
+        text_offset=issue.text_offset or 0,
+        anchor_text=issue.anchor_text,
+        anchor_length=issue.anchor_length or 0,
+        resolution_status=issue.resolution_status or "open",
+        judge_source=issue.judge_source or "rules",
+        judge_classification=issue.judge_classification or "hard_contradiction",
+        judge_confidence=issue.judge_confidence if issue.judge_confidence is not None else 1.0,
+        judge_reason=issue.judge_reason,
+        created_at=issue.created_at,
+    )
 
 
 @asynccontextmanager
@@ -241,12 +270,28 @@ def list_story_entities(
             story_id=e.story_id,
             canonical_name=e.canonical_name,
             entity_type=e.entity_type,
+            type_confidence=float(e.type_confidence or 0),
+            graph_eligible=bool(e.graph_eligible),
             aliases=_aliases_for_out(e.aliases),
             description=e.description,
             created_at=e.created_at,
         )
         for e in rows
     ]
+
+
+@app.get(
+    "/stories/{story_id}/relationship-graph",
+    response_model=RelationshipGraphOut,
+)
+def get_relationship_graph(
+    story_id: int,
+    include_preview: bool = False,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    _story_for_user(db, story_id, user)
+    return build_relationship_graph(db, story_id, include_preview=include_preview)
 
 
 @app.get("/stories/{story_id}/scenes", response_model=list[SceneSummaryOut])
@@ -379,6 +424,26 @@ def update_scene(
     )
 
 
+@app.delete("/stories/{story_id}/scenes/{scene_id}", status_code=204)
+def delete_scene(
+    story_id: int,
+    scene_id: int,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    _story_for_user(db, story_id, user)
+    scene = (
+        db.query(Scene)
+        .filter(Scene.id == scene_id, Scene.story_id == story_id)
+        .first()
+    )
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    db.delete(scene)
+    db.commit()
+    return Response(status_code=204)
+
+
 @app.post("/stories/{story_id}/scenes", response_model=SceneOut)
 def add_scene(
     story_id: int,
@@ -470,9 +535,10 @@ def update_claim_status(
     claim.subject = resolved.subject
     claim.predicate = resolved.predicate
     claim.claim_object = resolved.claim_object
+    claim.claim_type = resolved.claim_type
     claim.subject_entity_id = resolved.subject_entity_id
     claim.object_entity_id = resolved.object_entity_id
-    claim.source_hash = rehash_claim_row(claim)
+    claim.source_hash = resolved.source_hash
 
     scene = db.get(Scene, scene_id)
     if scene:
@@ -499,21 +565,40 @@ def validate_story(
 
     rows = (
         db.query(ValidationIssue)
-        .options(joinedload(ValidationIssue.scene))
+        .options(
+            joinedload(ValidationIssue.scene),
+            joinedload(ValidationIssue.conflicting_claim).joinedload(Claim.scene),
+        )
         .filter(ValidationIssue.story_id == story_id)
-        .order_by(ValidationIssue.id.desc())
         .all()
     )
-    return [
-        ValidationIssueOut(
-            id=i.id,
-            story_id=i.story_id,
-            scene_id=i.scene_id,
-            scene_number=i.scene.scene_number,
-            severity=i.severity,
-            message=i.message,
-            conflicting_claim_id=i.conflicting_claim_id,
-            created_at=i.created_at,
+    return [validation_issue_to_out(i) for i in rows]
+
+
+@app.patch(
+    "/stories/{story_id}/validation-issues/{issue_id}",
+    response_model=ValidationIssueOut,
+)
+def update_validation_issue_status(
+    story_id: int,
+    issue_id: int,
+    payload: ValidationIssueStatusUpdate,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    _story_for_user(db, story_id, user)
+    issue = (
+        db.query(ValidationIssue)
+        .options(
+            joinedload(ValidationIssue.scene),
+            joinedload(ValidationIssue.conflicting_claim).joinedload(Claim.scene),
         )
-        for i in rows
-    ]
+        .filter(ValidationIssue.id == issue_id, ValidationIssue.story_id == story_id)
+        .first()
+    )
+    if not issue:
+        raise HTTPException(status_code=404, detail="Validation issue not found")
+    issue.resolution_status = payload.resolution_status
+    db.commit()
+    db.refresh(issue)
+    return validation_issue_to_out(issue)

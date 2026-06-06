@@ -57,6 +57,8 @@ class EntityOut(BaseModel):
     story_id: int
     canonical_name: str
     entity_type: str
+    type_confidence: float = 0.0
+    graph_eligible: bool = False
     aliases: list[str] = Field(default_factory=list)
     description: Optional[str] = None
     created_at: datetime
@@ -80,10 +82,63 @@ class ClaimOut(BaseModel):
     status: str = "approved"
     evidence_text: Optional[str] = None
     source: str = "manual"
+    generation_origin: str = "unknown"
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    extracted_at: Optional[datetime] = None
     chunk_index: Optional[int] = None
     claim_version: int = 1
     superseded_by_claim_id: Optional[int] = None
     source_hash: Optional[str] = None
+
+
+class GraphSupportingClaimOut(BaseModel):
+    claim_id: int
+    predicate: str
+    claim_text: Optional[str] = None
+    confidence: float
+    scene_number: int
+
+
+class RelationshipGraphNodeOut(BaseModel):
+    id: str
+    entity_id: int
+    label: str
+    type: str
+    importance_score: float
+    mention_count: int
+    relationship_degree: int = 0
+
+
+class RelationshipGraphEdgeOut(BaseModel):
+    id: str
+    source: str
+    target: str
+    source_entity_id: int
+    target_entity_id: int
+    predicate: str
+    primary_relationship: str
+    sub_relationships: list[str] = Field(default_factory=list)
+    strength: float
+    confidence: float
+    claim_count: int
+    status: str = "active"  # active | preview
+    supporting_claims: list[GraphSupportingClaimOut] = Field(default_factory=list)
+
+
+class RelationshipGraphMetaOut(BaseModel):
+    canon_statuses: list[str]
+    relationship_predicate_count: int
+    approved_relationship_claim_count: int = 0
+    pending_preview_claim_count: int = 0
+    include_preview: bool = False
+
+
+class RelationshipGraphOut(BaseModel):
+    story_id: int
+    nodes: list[RelationshipGraphNodeOut]
+    edges: list[RelationshipGraphEdgeOut]
+    meta: RelationshipGraphMetaOut
 
 
 class ClaimStatusUpdate(BaseModel):
@@ -118,6 +173,8 @@ class SceneExtractionOut(BaseModel):
     fallback_used: bool = False
     large_chapter_warning: bool = False
     structural_entity_count: int = 0
+    suppressed_structural_count: int = 0
+    generation_counts: dict[str, int] = Field(default_factory=dict)
     chunks: list[ChunkExtractionDebugOut] = Field(default_factory=list)
 
 
@@ -150,7 +207,21 @@ class ValidationIssueOut(BaseModel):
     severity: str
     message: str
     conflicting_claim_id: Optional[int] = None
+    conflicting_scene_number: Optional[int] = None
+    current_claim_id: Optional[int] = None
+    text_offset: int = 0
+    anchor_text: Optional[str] = None
+    anchor_length: int = 0
+    resolution_status: str = "open"
+    judge_source: str = "rules"
+    judge_classification: str = "hard_contradiction"
+    judge_confidence: float = 1.0
+    judge_reason: Optional[str] = None
     created_at: datetime
+
+
+class ValidationIssueStatusUpdate(BaseModel):
+    resolution_status: Literal["open", "fixed", "rejected"]
 
 
 class SceneSummaryOut(BaseModel):

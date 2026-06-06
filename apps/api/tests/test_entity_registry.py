@@ -4,10 +4,16 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+import pytest
+
 from app.claim_entities import resolve_extracted
 from app.claim_identity import compute_entity_source_hash
 from app.database import Base
-from app.entity_registry import find_entity_by_name, get_or_create_entity
+from app.entity_registry import (
+    find_entity_by_name,
+    get_or_create_entity,
+    is_placeholder_entity_name,
+)
 from app.extraction.persist import merge_extracted_claims_for_scene
 from app.extraction.schema import ExtractedClaim
 from app.models import Claim, Entity, Scene, Story
@@ -42,6 +48,86 @@ def test_jon_resolves_to_jon_snow():
         assert jon.id == snow.id
         assert find_entity_by_name(db, story.id, "Jon Snow") is not None
         assert find_entity_by_name(db, story.id, "Jon").id == snow.id
+    finally:
+        db.close()
+
+
+def test_nickname_resolves_to_full_name():
+    db = _session()
+    try:
+        story = Story(title="W", description=None, owner_user_id="u")
+        db.add(story)
+        db.flush()
+        bella = get_or_create_entity(db, story.id, "Isabella Swan", "character")
+        db.flush()
+        # "Bella" is a suffix nickname of "Isabella" → same entity.
+        assert find_entity_by_name(db, story.id, "Bella").id == bella.id
+        resolved = get_or_create_entity(db, story.id, "Bella", "character")
+        assert resolved.id == bella.id
+    finally:
+        db.close()
+
+
+def test_given_name_then_full_name_merges_and_upgrades():
+    db = _session()
+    try:
+        story = Story(title="W", description=None, owner_user_id="u")
+        db.add(story)
+        db.flush()
+        short = get_or_create_entity(db, story.id, "Isabella", "character")
+        db.flush()
+        full = get_or_create_entity(db, story.id, "Isabella Swan", "character")
+        assert full.id == short.id
+        assert full.canonical_name == "Isabella Swan"
+        # Only one entity should exist; "Isabella" becomes an alias.
+        assert db.query(Entity).filter(Entity.story_id == story.id).count() == 1
+        assert find_entity_by_name(db, story.id, "Isabella").id == full.id
+    finally:
+        db.close()
+
+
+def test_surname_does_not_merge_family_members():
+    db = _session()
+    try:
+        story = Story(title="W", description=None, owner_user_id="u")
+        db.add(story)
+        db.flush()
+        bella = get_or_create_entity(db, story.id, "Isabella Swan", "character")
+        db.flush()
+        charlie = get_or_create_entity(db, story.id, "Charlie Swan", "character")
+        # Shared surname must not collapse father and daughter.
+        assert charlie.id != bella.id
+        assert db.query(Entity).filter(Entity.story_id == story.id).count() == 2
+    finally:
+        db.close()
+
+
+def test_possessive_phrase_stays_separate():
+    db = _session()
+    try:
+        story = Story(title="W", description=None, owner_user_id="u")
+        db.add(story)
+        db.flush()
+        bella = get_or_create_entity(db, story.id, "Isabella Swan", "character")
+        db.flush()
+        # "Isabella's mother" must not resolve to Isabella.
+        assert find_entity_by_name(db, story.id, "Isabella's mother") is None
+        mother = get_or_create_entity(db, story.id, "Isabella's mother", "character")
+        assert mother.id != bella.id
+    finally:
+        db.close()
+
+
+def test_placeholder_entity_names_rejected():
+    db = _session()
+    try:
+        story = Story(title="W", description=None, owner_user_id="u")
+        db.add(story)
+        db.flush()
+        for bad in ("Narrator", "I", "me", "myself"):
+            assert is_placeholder_entity_name(bad)
+            with pytest.raises(ValueError):
+                get_or_create_entity(db, story.id, bad, "character")
     finally:
         db.close()
 

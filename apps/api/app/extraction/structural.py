@@ -1,4 +1,4 @@
-"""Fast deterministic extraction — no LLM (entities + simple relationship hints)."""
+"""Fast deterministic extraction — emotion verbs, distaste, dialogue (filtered)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import re
 from app.extraction.pov import resolve_narrator_subject
 from app.extraction.schema import ExtractedClaim
 
-# Sentence-start words often capitalized but not character names
 _SKIP_NAMES = frozenset(
     {
         "the",
@@ -64,6 +63,8 @@ _SKIP_NAMES = frozenset(
         "chapter",
         "part",
         "section",
+        "you",
+        "me",
     }
 )
 
@@ -71,83 +72,112 @@ _NAME_RE = re.compile(
     r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b",
 )
 
+_EMOTION_VERBS = (
+    r"love|loves|loved|"
+    r"detest|detests|detested|"
+    r"hate|hates|hated|"
+    r"miss|misses|missed|"
+    r"trust|trusts|trusted|"
+    r"distrust|distrusts|distrusted|"
+    r"fear|fears|feared|"
+    r"care for|cared for|"
+    r"worry about|worried about"
+)
+
 _VERB_TO_PREDICATE: dict[str, str] = {
-    "trusts": "trusts",
-    "trusted": "trusts",
-    "distrusts": "distrusts",
-    "distrusted": "distrusts",
+    "love": "loves",
     "loves": "loves",
     "loved": "loves",
+    "detest": "detests",
+    "detests": "detests",
+    "detested": "detests",
+    "hate": "hates",
     "hates": "hates",
     "hated": "hates",
-    "looked": "looks_at",
-    "watched": "watches",
-    "stared": "stares_at",
-    "glanced": "glances_at",
-    "said": "speaks_with",
-    "told": "tells",
-    "asked": "asks",
-    "whispered": "whispers_to",
+    "miss": "misses",
+    "misses": "misses",
+    "missed": "misses",
+    "trust": "trusts",
+    "trusts": "trusts",
+    "trusted": "trusts",
+    "distrust": "distrusts",
+    "distrusts": "distrusts",
+    "distrusted": "distrusts",
+    "fear": "fears",
+    "fears": "fears",
+    "feared": "fears",
+    "care for": "cares_for",
+    "cared for": "cares_for",
+    "worry about": "worries_about",
+    "worried about": "worries_about",
     "half-brother": "is_half_brother_of",
 }
 
-# pattern, claim_tpl, claim_type, confidence
-_RELATION_PATTERNS: list[tuple[str, str, str, float]] = [
-    (
-        r"(?<![\"\w])(\w+(?:\s+\w+)?)\s+(?P<verb>looked at|watched|stared at|glanced at)\s+(\w+(?:\s+\w+)?)",
-        r"\1 interacts with \2 in this scene.",
-        "relationship_state",
-        0.52,
-    ),
-    (
-        r"(?<![\"\w])(I)\s+(?P<verb>trusts|trusted|distrusts|distrusted|loves|loved|hates|hated)\s+(\w+(?:\s+\w+)?)",
-        r"\1 has a strong emotional stance toward \2.",
-        "relationship_state",
-        0.62,
-    ),
-    (
-        r"(?<![\"\w])(\w+(?:\s+\w+)?)\s+(?P<verb>trusts|trusted|distrusts|distrusted|loves|loved|hates|hated)\s+(\w+(?:\s+\w+)?)",
-        r"\1 has a strong emotional stance toward \2.",
-        "relationship_state",
-        0.58,
-    ),
-    (
-        r"(?<![\"\w])(\w+(?:\s+\w+)?)\s+(?P<verb>said to|told|asked|whispered to)\s+(\w+(?:\s+\w+)?)",
-        r"\1 speaks with \2.",
-        "event",
-        0.5,
-    ),
-    (
-        r"(?<![\"\w])(\w+(?:\s+\w+)?)\s+is\s+the\s+half-brother\s+of\s+(\w+(?:\s+\w+)?)",
-        r"\1 is the half-brother of \2.",
-        "relationship_state",
-        0.72,
-    ),
-]
+
+# Words that start a new clause — stop object capture before these.
+_CLAUSE_BREAK_RE = (
+    r"when|because|since|though|if|as|while|where|who|that|but|and|or|and\s+then"
+)
+
+# Object after emotion verb: up to 8 words (e.g. "getting full access to her").
+_EMOTION_OBJECT_RE = (
+    r"(?P<tgt>(?!you\b)"
+    r"(?:the\s+|a\s+|an\s+)?[\w'-]+"
+    rf"(?:\s+(?!{_CLAUSE_BREAK_RE}\b)[\w'-]+){{0,7}})"
+)
+
+_TAIL_STOPWORDS = frozenset(
+    {
+        "in",
+        "on",
+        "at",
+        "to",
+        "from",
+        "with",
+        "for",
+        "and",
+        "or",
+        "the",
+        "a",
+        "an",
+        "deeply",
+        "truly",
+        "really",
+        "still",
+        "even",
+        "also",
+        "just",
+        "very",
+    }
+)
 
 
-def _predicate_from_match(m: re.Match[str]) -> str:
-    full = m.group(0).lower()
-    if "half-brother" in full or "half brother" in full:
-        return "is_half_brother_of"
-    raw = (m.groupdict().get("verb") or "").strip().lower()
-    if not raw:
-        return "relates_to"
-    token = raw.split()[0]
-    if raw in _VERB_TO_PREDICATE:
-        return _VERB_TO_PREDICATE[raw]
-    if token in _VERB_TO_PREDICATE:
-        return _VERB_TO_PREDICATE[token]
-    return raw.replace(" ", "_")
+def _clean_phrase(phrase: str) -> str:
+    parts = phrase.strip().rstrip(".,;:!?").split()
+    while len(parts) > 1 and parts[-1].lower() in _TAIL_STOPWORDS:
+        parts.pop()
+    return " ".join(parts)
+
+
+def _predicate_from_verb(raw: str) -> str:
+    key = raw.strip().lower()
+    if key in _VERB_TO_PREDICATE:
+        return _VERB_TO_PREDICATE[key]
+    token = key.split()[0]
+    return _VERB_TO_PREDICATE.get(token, key.replace(" ", "_"))
 
 
 def detect_entities(text: str, *, limit: int = 24) -> list[str]:
+    from app.extraction.claim_filter import _JUNK_SUBJECT_STARTS
+
     seen: set[str] = set()
     out: list[str] = []
     for m in _NAME_RE.finditer(text):
         name = m.group(1).strip()
         key = name.lower()
         if key in _SKIP_NAMES or len(name) < 2:
+            continue
+        if _JUNK_SUBJECT_STARTS.match(key):
             continue
         if key in seen:
             continue
@@ -164,32 +194,119 @@ def structural_extract_chunk(
     *,
     pov_character: str | None = None,
 ) -> list[ExtractedClaim]:
-    """Low-confidence claims from patterns + entity co-occurrence hints."""
+    """Emotion and stance patterns; claim_type refined after entity resolution."""
     found: list[ExtractedClaim] = []
-    for pattern, claim_tpl, claim_type, conf in _RELATION_PATTERNS:
-        for m in re.finditer(pattern, text, re.IGNORECASE):
-            subj = resolve_narrator_subject(m.group(1).strip(), pov_character)
-            if not subj:
-                continue
-            tgt = ""
-            if m.lastindex and m.lastindex >= 2:
-                tgt = m.group(m.lastindex).strip()
-            if tgt.lower() in _SKIP_NAMES:
-                continue
-            if subj.lower() in _SKIP_NAMES:
-                continue
-            claim_sentence = claim_tpl.replace(r"\1", subj).replace(r"\2", tgt)
-            found.append(
-                ExtractedClaim(
-                    subject=subj,
-                    claim_type=claim_type,
-                    predicate=_predicate_from_match(m),
-                    target=tgt,
-                    claim=claim_sentence,
-                    confidence=conf,
-                    canon_level="soft",
-                    evidence=m.group(0).strip()[:200],
-                    chunk_index=chunk_index,
-                )
+
+    def append_claim(
+        subj: str,
+        tgt: str,
+        verb_raw: str,
+        evidence: str,
+        confidence: float,
+    ) -> None:
+        if not subj or not tgt:
+            return
+        subj = _clean_phrase(subj)
+        tgt = _clean_phrase(tgt)
+        if not subj or not tgt:
+            return
+        if subj.lower() in _SKIP_NAMES or tgt.lower() in _SKIP_NAMES:
+            return
+        if " way" in subj.lower() or subj.lower().startswith("way "):
+            return
+        pred = _predicate_from_verb(verb_raw)
+        found.append(
+            ExtractedClaim(
+                subject=subj,
+                claim_type="relationship_state",
+                predicate=pred,
+                target=tgt,
+                claim=f"{subj} {pred.replace('_', ' ')} {tgt}.",
+                confidence=confidence,
+                canon_level="soft",
+                evidence=evidence[:200],
+                chunk_index=chunk_index,
+                generation_origin="structural",
             )
+        )
+
+    # I loved Phoenix / I love getting full access to her
+    for m in re.finditer(
+        rf"(?<![\"\w])(I)\s+(?P<verb>{_EMOTION_VERBS})\s+{_EMOTION_OBJECT_RE}",
+        text,
+        re.I,
+    ):
+        subj = resolve_narrator_subject("I", pov_character)
+        if not subj:
+            continue
+        tgt = _clean_phrase(m.group("tgt"))
+        if tgt.lower() in ("the", "and", "or", "it") or not tgt:
+            continue
+        append_claim(subj, tgt, m.group("verb"), m.group(0), 0.64)
+
+    # I love you, Mom
+    for m in re.finditer(
+        r"(?<![\"\w])(I)\s+love\s+you,?\s*(Mom|Mother|Mum)\b",
+        text,
+        re.I,
+    ):
+        subj = resolve_narrator_subject("I", pov_character)
+        if not subj:
+            continue
+        tgt = m.group(2).strip()
+        append_claim(subj, tgt, "love", m.group(0), 0.72)
+
+    # distaste for Forks / my distaste for Forks
+    for m in re.finditer(
+        r"(?:(?:I|my)\s+)?distaste\s+for\s+(?:the\s+)?([A-Za-z][\w\s'-]{0,40}?)(?=[\s.,;!?]|$)",
+        text,
+        re.I,
+    ):
+        subj = resolve_narrator_subject("I", pov_character)
+        if not subj:
+            continue
+        tgt = m.group(1).strip().rstrip(".,;:!?")
+        append_claim(subj, tgt, "detest", m.group(0), 0.7)
+
+    # Named subject: Nahira loved Ashan / Nahira loved the quiet town
+    for m in re.finditer(
+        rf"(?<![\"\w])([A-Z][\w'-]+(?:\s+[A-Z][\w'-]+)?)\s+"
+        rf"(?P<verb>{_EMOTION_VERBS})\s+{_EMOTION_OBJECT_RE}",
+        text,
+        re.I,
+    ):
+        g1 = m.group(1).strip().lower()
+        if g1 in _SKIP_NAMES or g1 in ("i", "in a", "a way", "way"):
+            continue
+        if g1.endswith(" way") or g1.startswith("in ") or " way" in g1:
+            continue
+        subj = m.group(1).strip()
+        tgt = _clean_phrase(m.group("tgt"))
+        if not tgt or tgt.lower() in ("the", "and", "or"):
+            continue
+        append_claim(subj, tgt, m.group("verb"), m.group(0), 0.58)
+
+    # half-brother
+    for m in re.finditer(
+        r"(?<![\"\w])(\w+(?:\s+\w+)?)\s+is\s+the\s+half-brother\s+of\s+(\w+(?:\s+\w+)?)",
+        text,
+        re.I,
+    ):
+        subj = m.group(1).strip()
+        tgt = m.group(2).strip()
+        found.append(
+            ExtractedClaim(
+                subject=subj,
+                claim_type="relationship_state",
+                predicate="is_half_brother_of",
+                target=tgt,
+                claim=f"{subj} is the half-brother of {tgt}.",
+                confidence=0.72,
+                canon_level="soft",
+                evidence=m.group(0)[:200],
+                chunk_index=chunk_index,
+                generation_origin="structural",
+            )
+        )
+
     return found

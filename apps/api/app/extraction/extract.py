@@ -18,6 +18,9 @@ from app.extraction.schema import (
     ExtractionResult,
 )
 from app.extraction.pov import normalize_claims_for_pov
+from app.extraction.claim_filter import filter_extracted_claims
+from app.extraction.family import discover_cast_from_text, family_extract_chunk
+from app.extraction.layer_dedupe import suppress_redundant_structural_claims
 from app.extraction.structural import detect_entities, structural_extract_chunk
 
 CONFIDENCE_AUTO_APPROVE = 0.90
@@ -129,6 +132,7 @@ def _heuristic_extract_chunk(text: str, chunk_index: int) -> list[ExtractedClaim
                     canon_level=canon,  # type: ignore[arg-type]
                     evidence=evidence,
                     chunk_index=chunk_index,
+                    generation_origin="heuristic",
                 )
             )
     return found
@@ -203,7 +207,11 @@ def _openai_extract_chunk(
                     item["claim_type"] = "character_state"
                 elif ct not in CLAIM_TYPES:
                     item["claim_type"] = "character_state"
-            claims.append(ExtractedClaim.model_validate(item))
+            claims.append(
+                ExtractedClaim.model_validate(item).model_copy(
+                    update={"generation_origin": "llm"}
+                )
+            )
         return claims
 
 
@@ -291,11 +299,17 @@ def extract_claims_from_text(
     chunk_debug: list[ChunkExtractionDebug] = []
     all_entities: set[str] = set()
 
+    cast = discover_cast_from_text(text)
+
     for i, chunk in enumerate(chunks):
         entities = detect_entities(chunk)
         all_entities.update(entities)
         structural = structural_extract_chunk(chunk, i, pov_character=pov_character)
+        family = family_extract_chunk(
+            chunk, i, pov_character=pov_character, cast=cast
+        )
         all_claims.extend(structural)
+        all_claims.extend(family)
 
         llm_claims: list[ExtractedClaim] = []
         openai_attempted = False
@@ -336,8 +350,12 @@ def extract_claims_from_text(
             )
         )
 
-    deduped = _dedupe_claims(all_claims)
+    filtered = filter_extracted_claims(all_claims, pov_character=pov_character)
     any_openai_ok = any(c.openai_ok for c in chunk_debug)
+    filtered, suppressed_structural = suppress_redundant_structural_claims(
+        filtered, llm_active=any_openai_ok
+    )
+    deduped = _dedupe_claims(filtered)
     if any_openai and any_fallback:
         source = "hybrid"
     elif any_openai_ok:
@@ -347,6 +365,7 @@ def extract_claims_from_text(
 
     return ExtractionResult(
         claims=deduped,
+        suppressed_structural_count=suppressed_structural,
         source=source,
         chunk_count=total,
         word_count=word_count(text),

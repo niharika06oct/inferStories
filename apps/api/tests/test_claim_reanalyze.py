@@ -5,7 +5,11 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.claim_entities import resolve_extracted
-from app.claim_identity import compute_source_hash, source_hash_for_claim_row
+from app.claim_identity import (
+    compute_entity_source_hash,
+    compute_source_hash,
+    source_hash_for_claim_row,
+)
 from app.database import Base
 from app.extraction.persist import (
     delete_replaceable_scene_claims,
@@ -152,7 +156,180 @@ def test_merge_updates_same_hash_in_place():
         db.close()
 
 
-def test_delete_replaceable_keeps_approved():
+def test_merge_matches_approved_by_evidence_when_hash_differs():
+    """Re-extract with refined claim_type must not duplicate an approved row."""
+    db = _session()
+    try:
+        story = Story(title="t3", description=None, owner_user_id="test-user")
+        db.add(story)
+        db.flush()
+        scene = Scene(story_id=story.id, scene_number=1, text="x")
+        db.add(scene)
+        db.flush()
+
+        first = resolve_extracted(
+            db,
+            story.id,
+            ExtractedClaim(
+                subject="Niharika",
+                claim_type="relationship_state",
+                predicate="loves",
+                target="water",
+                claim="Niharika loves the water.",
+                confidence=0.62,
+                canon_level="soft",
+                evidence="I loved Niharika",
+                chunk_index=0,
+            ),
+        )
+        approved = Claim(
+            story_id=story.id,
+            scene_id=scene.id,
+            subject=first.subject,
+            predicate=first.predicate,
+            claim_object=first.claim_object,
+            subject_entity_id=first.subject_entity_id,
+            object_entity_id=first.object_entity_id,
+            claim_type="relationship_state",
+            claim_text="Niharika has a strong emotional stance toward water.",
+            status="approved",
+            source="extracted",
+            # Legacy hash from before claim_type refinement on approve.
+            source_hash=compute_entity_source_hash(
+                first.subject_entity_id,
+                first.predicate,
+                first.object_entity_id,
+                "relationship_state",
+            ),
+            evidence_text="I loved Niharika",
+            claim_version=1,
+            confidence=0.62,
+        )
+        db.add(approved)
+        db.flush()
+
+        second = resolve_extracted(
+            db,
+            story.id,
+            ExtractedClaim(
+                subject="Niharika",
+                claim_type="relationship_state",
+                predicate="loves",
+                target="water",
+                claim="Niharika loves the water.",
+                confidence=0.62,
+                canon_level="soft",
+                evidence="I loved Niharika",
+                chunk_index=0,
+            ),
+        )
+        assert second.claim_type == "character_preference"
+        assert second.source_hash != approved.source_hash
+
+        delete_replaceable_scene_claims(db, scene)
+        merge_extracted_claims_for_scene(
+            db,
+            scene,
+            [
+                ExtractedClaim(
+                    subject="Niharika",
+                    claim_type="relationship_state",
+                    predicate="loves",
+                    target="water",
+                    claim="Niharika loves the water.",
+                    confidence=0.62,
+                    canon_level="soft",
+                    evidence="I loved Niharika",
+                    chunk_index=0,
+                )
+            ],
+        )
+        db.commit()
+
+        rows = db.query(Claim).filter(Claim.scene_id == scene.id).all()
+        assert len(rows) == 1
+        assert rows[0].status == "approved"
+        assert rows[0].claim_type == "character_preference"
+    finally:
+        db.close()
+
+
+def test_rejected_not_resurfaced_as_suggested():
+    db = _session()
+    try:
+        story = Story(title="rej", description=None, owner_user_id="test-user")
+        db.add(story)
+        db.flush()
+        scene = Scene(story_id=story.id, scene_number=1, text="x")
+        db.add(scene)
+        db.flush()
+
+        resolved = resolve_extracted(
+            db,
+            story.id,
+            ExtractedClaim(
+                subject="Asha",
+                claim_type="relationship_state",
+                predicate="trusts",
+                target="Rohan",
+                claim="Asha trusts Rohan.",
+                confidence=0.58,
+                canon_level="soft",
+                evidence="Asha trusts Rohan in the hall.",
+                chunk_index=0,
+            ),
+        )
+        rejected = Claim(
+            story_id=story.id,
+            scene_id=scene.id,
+            subject=resolved.subject,
+            predicate=resolved.predicate,
+            claim_object=resolved.claim_object,
+            subject_entity_id=resolved.subject_entity_id,
+            object_entity_id=resolved.object_entity_id,
+            claim_type=resolved.claim_type,
+            claim_text="Asha trusts Rohan.",
+            status="rejected",
+            source="extracted",
+            source_hash=resolved.source_hash,
+            evidence_text="Asha trusts Rohan in the hall.",
+            claim_version=1,
+            confidence=0.58,
+        )
+        db.add(rejected)
+        db.flush()
+        rejected_id = rejected.id
+
+        delete_replaceable_scene_claims(db, scene)
+        merge_extracted_claims_for_scene(
+            db,
+            scene,
+            [
+                ExtractedClaim(
+                    subject="Asha",
+                    claim_type="relationship_state",
+                    predicate="trusts",
+                    target="Rohan",
+                    claim="Asha trusts Rohan.",
+                    confidence=0.6,
+                    canon_level="soft",
+                    evidence="Asha trusts Rohan in the hall.",
+                    chunk_index=0,
+                )
+            ],
+        )
+        db.commit()
+
+        rows = db.query(Claim).filter(Claim.scene_id == scene.id).all()
+        assert len(rows) == 1
+        assert rows[0].id == rejected_id
+        assert rows[0].status == "rejected"
+        assert rows[0].confidence == 0.6
+    finally:
+        db.close()
+
+
+def test_delete_replaceable_keeps_approved_and_rejected():
     db = _session()
     try:
         story = Story(title="t2", description=None, owner_user_id="test-user")
@@ -186,11 +363,24 @@ def test_delete_replaceable_keeps_approved():
                 source_hash=source_hash_for_claim_row("B", "p", "o", "p"),
             )
         )
+        db.add(
+            Claim(
+                story_id=story.id,
+                scene_id=scene.id,
+                subject="C",
+                predicate="p",
+                claim_object="o",
+                status="rejected",
+                source="extracted",
+                source_hash=source_hash_for_claim_row("C", "p", "o", "p"),
+            )
+        )
         db.flush()
 
         delete_replaceable_scene_claims(db, scene)
         remaining = db.query(Claim).filter(Claim.scene_id == scene.id).all()
-        assert len(remaining) == 1
-        assert remaining[0].subject == "A"
+        assert len(remaining) == 2
+        subjects = {r.subject for r in remaining}
+        assert subjects == {"A", "C"}
     finally:
         db.close()
