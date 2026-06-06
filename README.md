@@ -9,7 +9,7 @@ Monorepo for **story continuity memory**: a FastAPI backend (`apps/api`) stores 
 | Path | Role |
 |------|------|
 | `apps/api` | FastAPI + SQLAlchemy + Alembic + PostgreSQL (`psycopg`) |
-| `apps/web` | Next.js UI (`app/StoryWorkspace.tsx`, `lib/api.ts`, import helpers) |
+| `apps/web` | Next.js writer workspace (`app/StoryEditor.tsx`, review panels, import helpers, API client) |
 | `apps/api/scripts/reset_local_postgres.sql` | Optional local Postgres role + database bootstrap |
 
 ## Prerequisites
@@ -64,14 +64,18 @@ Use **port 8001** if something else (Docker, EDB, Django) already uses **8000**.
 - OpenAPI: [http://127.0.0.1:8001/docs](http://127.0.0.1:8001/docs)
 - CORS allows Next dev origins (`localhost:3000`, etc.).
 
-### Optional: AI story descriptions
+### Optional: AI features
 
-Add to `apps/api/.env` for OpenAI-backed synopses (otherwise a local heuristic summary is used):
+Add to `apps/api/.env` for OpenAI-backed synopses and optional semantic continuity judging. Without these settings, the app still runs with local heuristics and rule-only continuity validation.
 
 ```env
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini
 # OPENAI_BASE_URL=https://api.openai.com/v1
+
+# Optional: use AI only after rule-based continuity candidates are found.
+# CONTINUITY_AI_JUDGE_ENABLED=1
+# CONTINUITY_AI_MODEL=gpt-4o-mini
 ```
 
 ## Run the web app
@@ -99,9 +103,9 @@ OPENAI_MODEL=gpt-4o-mini
 | Area | What you can do |
 |------|-----------------|
 | **Left — Your stories** | List all stories; **Import from this device** (`.docx`, `.txt`, `.md`); **+ New story** |
-| **Left — Scenes & chapters** | Jump to a scene, **Write new scene**, download `.md` export |
+| **Left — Scenes & chapters** | Jump to a chapter, **Write new scene**, delete a chapter, download `.md` export |
 | **Center** | Story metadata; chapter text with **autosave**, in-editor **grammar underlines** (right-click to apply/dismiss), **POV character**, **Save & analyze memory**, story-memory summary |
-| **Right — accordion** | **Continuity**; **New / Accepted / Rejected claims** (expand one section at a time; click a claim to jump to evidence in the chapter) |
+| **Right — accordion** | **Open / handled continuity**, **relationship graph**, **New / Accepted / Rejected claims** (expand one section at a time; click a claim to jump to evidence when anchors are available) |
 
 **Import flow:** pick a file → choose **new** or **existing** story → name scenes → import. If description is empty, a synopsis is generated from scene text after import.
 
@@ -117,7 +121,7 @@ From `apps/api` with the venv active:
 pytest
 ```
 
-Tests use in-memory SQLite (`SKIP_ALEMBIC_ON_STARTUP=1`) and cover stories/scenes CRUD, import-friendly empty claims, contradiction validation, duplicate scene rejection, and description generation.
+Tests use in-memory SQLite (`SKIP_ALEMBIC_ON_STARTUP=1`) and cover stories/scenes CRUD, entity resolution, claim extraction and dedupe, relationship graph output, continuity validation/judging, issue resolution, duplicate scene rejection, and description generation.
 
 ## HTTP API
 
@@ -129,24 +133,34 @@ Tests use in-memory SQLite (`SKIP_ALEMBIC_ON_STARTUP=1`) and cover stories/scene
 | `GET` | `/stories/{story_id}` | Get one story |
 | `PATCH` | `/stories/{story_id}` | Update `title` and/or `description` |
 | `POST` | `/stories/{story_id}/generate-description` | AI/heuristic synopsis from scenes; saves to story |
+| `GET` | `/stories/{story_id}/entities` | List canonical entities and aliases for a story |
+| `GET` | `/stories/{story_id}/relationship-graph` | Build the character/entity relationship graph |
 | `GET` | `/stories/{story_id}/scenes` | List scenes (summary) |
 | `GET` | `/stories/{story_id}/scenes/{scene_id}` | Scene detail with claims |
 | `POST` | `/stories/{story_id}/scenes` | Add a scene (`scene_number`, `text`, `claims[]`). **409** if duplicate `scene_number` |
 | `PATCH` | `/stories/{story_id}/scenes/{scene_id}` | Update scene text, number, and claims (re-validates) |
+| `DELETE` | `/stories/{story_id}/scenes/{scene_id}` | Delete a chapter and its derived claims/issues |
+| `PATCH` | `/stories/{story_id}/scenes/{scene_id}/claims/{claim_id}` | Approve, reject, or edit a claim; revalidates the scene |
 | `POST` | `/stories/{story_id}/validate` | List stored **`ValidationIssue`** rows |
+| `PATCH` | `/stories/{story_id}/validation-issues/{issue_id}` | Mark a continuity issue as `open`, `fixed`, or `rejected` |
 
 **Story IDs** are integer primary keys.
 
 **Claims** in JSON use the field **`object`** for the triple’s object slot (stored as `claim_object` in the DB).
 
-### Continuity rules
+### Continuity memory
 
-When a scene is saved or updated, each claim is compared to claims in **earlier** scenes (lower `scene_number`):
+When a scene is saved or updated with extraction enabled, inferStories:
 
-1. Same normalized **subject + predicate**, different **object** → contradiction.
-2. Same normalized **subject + object**, different **predicate** → incompatible relationship.
+1. Extracts claims from structural patterns, family/relationship language, optional LLM output, and heuristic fallbacks.
+2. Resolves subjects and objects to canonical story entities where possible, including aliases like short names and nicknames.
+3. Filters placeholder or unresolved entities such as `Narrator` and unresolved first-person pronouns when no POV character is known.
+4. Compares current claims against accepted claims from **earlier** scenes.
+5. Saves persisted `ValidationIssue` rows with evidence anchors, conflicting claim references, resolution status, and judge metadata.
 
-If either side is **`is_major_plotline`** → severity **`high`**, else **`medium`**.
+Continuity checking is intentionally conservative. It focuses on explicit incompatible objects and explicit predicate oppositions, and treats emotional progression more carefully. For example, "uncomfortable with" is not automatically treated as "distrusts." Optional AI judging can classify rule candidates as `hard_contradiction`, `soft_tension`, `compatible_progression`, or `not_issue`; only hard contradictions and soft tensions are shown.
+
+Handled issues can be moved out of the active review list by marking them **Fixed** or **Rejected** in the web app.
 
 ### Example: contradiction (curl)
 
@@ -192,9 +206,10 @@ flowchart TB
     end
 
     subgraph Backend["apps/api — FastAPI :8001"]
-        API["REST: stories · scenes · claims · validate"]
-        Extract["Claim extraction<br/>structural → OpenAI → heuristic"]
-        Canon["Continuity rules<br/>compare chapter vs earlier canon"]
+        API["REST: stories · scenes · claims · entities · validate"]
+        Extract["Claim extraction<br/>structural · family · OpenAI · heuristic"]
+        Registry["Entity registry<br/>canonical names · aliases · graph eligibility"]
+        Canon["Continuity judge<br/>rules first · optional AI for ambiguous candidates"]
     end
 
     AuthSvc["auth-service :4000<br/>session / Bearer token"]
@@ -207,9 +222,10 @@ flowchart TB
     Editor --> LTProxy --> LT
     API --> AuthSvc
     API --> DB
-    API --> Extract --> DB
+    API --> Extract --> Registry --> DB
     API --> Canon --> DB
     Extract --> OpenAI
+    Canon --> OpenAI
 ```
 
 | Request path | Purpose |
@@ -241,23 +257,28 @@ flowchart TD
         Write --> Autosave["Autosave (~2s)<br/>PATCH text only<br/>run_extraction = false"]
         Write --> Grammar["Grammar check (~3.5s debounce)<br/>blue underlines in editor"]
         Grammar --> RCMenu["Right-click underline<br/>Apply fix or Dismiss<br/>dismissals persist in localStorage"]
+        PickChapter --> DeleteChapter["Delete chapter<br/>removes derived claims/issues"]
         Write --> Analyze["Save & analyze memory<br/>run_extraction = true"]
     end
 
     subgraph Extract["API — extraction on analyze"]
         Analyze --> Chunk[Chunk long chapters]
-        Chunk --> Structural[Structural patterns + POV-aware I → character]
+        Chunk --> Structural[Structural + family patterns<br/>POV-aware I → character]
         Chunk --> LLM[OpenAI if configured<br/>else heuristic fallback]
-        Structural --> StoreClaims[(Save claims with status)]
-        LLM --> StoreClaims
+        Structural --> Registry[Resolve canonical entities<br/>aliases · no Narrator placeholders]
+        LLM --> Registry
+        Registry --> StoreClaims[(Save claims with status)]
         StoreClaims --> Confidence["approved / needs_review / suggested"]
     end
 
-    StoreClaims --> Validate[Validate vs claims in earlier chapters]
-    Validate --> StoreIssues[(Persist ValidationIssue rows)]
+    StoreClaims --> Validate[Validate vs accepted claims in earlier chapters]
+    Validate --> Judge[Rules-first judge<br/>optional AI classification]
+    Judge --> StoreIssues[(Persist ValidationIssue rows<br/>anchors · source · confidence · resolution)]
 
     subgraph Right["Right panel — accordion sections"]
-        StoreIssues --> Cont["Continuity"]
+        StoreIssues --> Cont["Open continuity<br/>fixed · reject"]
+        StoreIssues --> Handled["Handled continuity<br/>fixed / rejected"]
+        StoreClaims --> Graph["Relationship graph"]
         Confidence --> NewC["New claims<br/>approve · reject"]
         Confidence --> Acc["Accepted claims"]
         Confidence --> Rej["Rejected claims<br/>hidden from New until opened"]
@@ -265,6 +286,7 @@ flowchart TD
 
     NewC -->|click claim card| Jump[Scroll chapter + amber highlight<br/>evidence quote in text]
     Cont -->|Refresh| Poll[Reload continuity list]
+    Cont -->|Fixed / Reject| Handled
 
     Write --> ExportMd[Export story .md]
 ```
@@ -276,6 +298,16 @@ flowchart TD
 | **Autosave** while typing | `PATCH` scene, `run_extraction: false` | Text + POV only; no new extraction |
 | **Save & analyze memory** | `PATCH` or `POST` scene, `run_extraction: true` | Re-extracts claims for that chapter, re-runs continuity validation |
 | **Approve / reject claim** | `PATCH` claim status | Moves claim between New / Accepted / Rejected in the UI |
+| **Fixed / reject continuity** | `PATCH` validation issue | Moves handled issues out of the open continuity list |
+| **Delete chapter** | `DELETE` scene | Removes the chapter plus its dependent claims and validation issues |
+
+## Conceptual references
+
+These are useful chapters/sections for understanding the current implementation choices:
+
+- **DDIA:** Chapter 2, *Data Models and Query Languages* for the relational story/claim/entity model; Chapter 3, *Storage and Retrieval* for persisted validation issues as derived data.
+- **Speech and Language Processing:** information extraction, named entity recognition, relation extraction, and coreference sections for claim extraction and alias/entity resolution.
+- **AIMA:** knowledge representation and logical agents sections for treating accepted claims as story facts and continuity checks as reasoning over those facts.
 
 ### Local dev startup (quick)
 

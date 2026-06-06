@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# inferStories Web App
 
-## Getting Started
+Next.js writer workspace for inferStories. It talks to the FastAPI backend in `apps/api`, the auth service, and the grammar-check proxy.
 
-First, run the development server:
+## Local Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
+cp .env.local.example .env.local
 pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Set `API_PROXY_TARGET=http://127.0.0.1:8001` in `.env.local` so `/api/upstream/*` routes reach the FastAPI app. Restart `pnpm dev` after env changes.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Open [http://localhost:3000](http://localhost:3000).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Workspace Features
 
-## Learn More
+- Library page for story browsing, story creation, and manuscript import (`.docx`, `.txt`, `.md`).
+- Story editor with chapter selection, new chapter creation, chapter deletion, autosave, POV character capture, grammar underlines, and markdown export.
+- Memory analysis via **Save & analyze memory**, which asks the API to extract claims, resolve entities/aliases, persist claims, and rerun continuity validation.
+- Claims review panels for suggested, accepted, and rejected claims. Claim actions call the API and refresh the current chapter plus continuity results.
+- Continuity review panels split open issues from handled issues. Use **Fixed** or **Reject** to move resolved noise out of the active review list.
+- Relationship graph panel for entity connections discovered from accepted story claims.
 
-To learn more about Next.js, take a look at the following resources:
+## Important Files
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `app/StoryEditor.tsx` - main writer workspace.
+- `components/WorkspaceRightPanel.tsx` - accordion panel for continuity, graph, and claim review.
+- `components/ContinuityIssuesList.tsx` - continuity issue cards and fixed/rejected actions.
+- `components/RelationshipGraphView.tsx` - graph visualization.
+- `components/ClaimsReviewPanel.tsx` - claim approval/rejection UI.
+- `lib/api.ts` - typed API client for the Next proxy/FastAPI backend.
+- `lib/claimEvidenceSpan.ts` - claim and continuity evidence anchor matching for editor focus/highlight.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Dev Commands
 
-## Deploy on Vercel
+```bash
+pnpm install
+pnpm dev
+pnpm lint
+pnpm typecheck
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Current Known Gap
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Text focus/highlight after clicking a claim or continuity issue is improved but still not fully reliable in every case. The deferred bug is tracked in `docs/BUG_BACKLOG.md`.
