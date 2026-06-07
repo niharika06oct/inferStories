@@ -36,7 +36,9 @@ class ContinuityCandidate:
     message: str
     rule_classification: ContinuityClassification
     rule_reason: str
-    conflict_kind: Literal["exclusive_object", "predicate_opposition"]
+    conflict_kind: Literal[
+        "exclusive_object", "predicate_opposition", "polarity_flip"
+    ]
 
 
 class ContinuityJudgment(BaseModel):

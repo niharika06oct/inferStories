@@ -60,7 +60,7 @@ def _structural_only_extract(text: str):
         from app.extraction import extract as extract_mod
 
         def _no_llm(*_a, **_k):
-            return [], False, False, False
+            return [], False, False, False, 0, False, 0
 
         monkeypatch.setattr(extract_mod, "_llm_extract_chunk", _no_llm)
         return extract_claims_from_text(text, pov_character=POV)

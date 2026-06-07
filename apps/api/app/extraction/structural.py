@@ -6,6 +6,7 @@ import re
 
 from app.extraction.pov import resolve_narrator_subject
 from app.extraction.schema import ExtractedClaim
+from app.nlp.negation import has_identity_negation
 
 _SKIP_NAMES = frozenset(
     {
@@ -114,6 +115,13 @@ _VERB_TO_PREDICATE: dict[str, str] = {
 }
 
 
+# Optional auxiliary + negation between subject and verb: "did not", "was never",
+# "had never", "do not", "n't". Captured so polarity can be set to False.
+_NEG_PREFIX_RE = (
+    r"(?:(?:did|do|does|could|would|should|had|have|has|was|were|am|are|is|will|can)\s+)?"
+    r"(?:not|never|no\s+longer)\s+"
+)
+
 # Words that start a new clause — stop object capture before these.
 _CLAUSE_BREAK_RE = (
     r"when|because|since|though|if|as|while|where|who|that|but|and|or|and\s+then"
@@ -148,6 +156,11 @@ _TAIL_STOPWORDS = frozenset(
         "also",
         "just",
         "very",
+        "all",
+        "either",
+        "anymore",
+        "too",
+        "yet",
     }
 )
 
@@ -203,6 +216,8 @@ def structural_extract_chunk(
         verb_raw: str,
         evidence: str,
         confidence: float,
+        *,
+        polarity: bool = True,
     ) -> None:
         if not subj or not tgt:
             return
@@ -215,13 +230,15 @@ def structural_extract_chunk(
         if " way" in subj.lower() or subj.lower().startswith("way "):
             return
         pred = _predicate_from_verb(verb_raw)
+        neg = "" if polarity else "not "
         found.append(
             ExtractedClaim(
                 subject=subj,
                 claim_type="relationship_state",
                 predicate=pred,
                 target=tgt,
-                claim=f"{subj} {pred.replace('_', ' ')} {tgt}.",
+                claim=f"{subj} {neg}{pred.replace('_', ' ')} {tgt}.",
+                polarity=polarity,
                 confidence=confidence,
                 canon_level="soft",
                 evidence=evidence[:200],
@@ -230,9 +247,9 @@ def structural_extract_chunk(
             )
         )
 
-    # I loved Phoenix / I love getting full access to her
+    # I loved Phoenix / I love getting full access to her / I did not trust him
     for m in re.finditer(
-        rf"(?<![\"\w])(I)\s+(?P<verb>{_EMOTION_VERBS})\s+{_EMOTION_OBJECT_RE}",
+        rf"(?<![\"\w])(I)\s+(?P<neg>{_NEG_PREFIX_RE})?(?P<verb>{_EMOTION_VERBS})\s+{_EMOTION_OBJECT_RE}",
         text,
         re.I,
     ):
@@ -242,7 +259,8 @@ def structural_extract_chunk(
         tgt = _clean_phrase(m.group("tgt"))
         if tgt.lower() in ("the", "and", "or", "it") or not tgt:
             continue
-        append_claim(subj, tgt, m.group("verb"), m.group(0), 0.64)
+        polarity = m.group("neg") is None
+        append_claim(subj, tgt, m.group("verb"), m.group(0), 0.64, polarity=polarity)
 
     # I love you, Mom
     for m in re.finditer(
@@ -268,10 +286,10 @@ def structural_extract_chunk(
         tgt = m.group(1).strip().rstrip(".,;:!?")
         append_claim(subj, tgt, "detest", m.group(0), 0.7)
 
-    # Named subject: Nahira loved Ashan / Nahira loved the quiet town
+    # Named subject: Nahira loved Ashan / Edward did not trust Bella
     for m in re.finditer(
         rf"(?<![\"\w])([A-Z][\w'-]+(?:\s+[A-Z][\w'-]+)?)\s+"
-        rf"(?P<verb>{_EMOTION_VERBS})\s+{_EMOTION_OBJECT_RE}",
+        rf"(?P<neg>{_NEG_PREFIX_RE})?(?P<verb>{_EMOTION_VERBS})\s+{_EMOTION_OBJECT_RE}",
         text,
         re.I,
     ):
@@ -284,7 +302,8 @@ def structural_extract_chunk(
         tgt = _clean_phrase(m.group("tgt"))
         if not tgt or tgt.lower() in ("the", "and", "or"):
             continue
-        append_claim(subj, tgt, m.group("verb"), m.group(0), 0.58)
+        polarity = m.group("neg") is None
+        append_claim(subj, tgt, m.group("verb"), m.group(0), 0.58, polarity=polarity)
 
     # half-brother
     for m in re.finditer(

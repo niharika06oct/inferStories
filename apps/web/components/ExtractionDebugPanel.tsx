@@ -1,6 +1,7 @@
 "use client";
 
 import type { SceneExtractionOut } from "../lib/api";
+import { FastusDebugSection } from "./FastusDebugSection";
 import { formatGenerationBreakdown } from "../lib/formatExtractionSummary";
 
 type ExtractionDebugPanelProps = {
@@ -54,6 +55,8 @@ export function ExtractionDebugPanel({ extraction }: ExtractionDebugPanelProps) 
         {extraction.error ? (
           <p className="text-destructive">{extraction.error}</p>
         ) : null}
+
+        <FastusDebugSection extraction={extraction} />
 
         {extraction.chunks && extraction.chunks.length > 0 ? (
           <ul className="space-y-2">

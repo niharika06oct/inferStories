@@ -121,6 +121,13 @@ export type ClaimOut = {
   source_hash?: string | null;
 };
 
+export type FastusDebugEventOut = {
+  stage: string;
+  event: string;
+  message: string;
+  detail?: Record<string, string>;
+};
+
 export type ChunkExtractionDebugOut = {
   chunk_index: number;
   word_count: number;
@@ -130,6 +137,17 @@ export type ChunkExtractionDebugOut = {
   structural_claims: number;
   llm_claims: number;
   entities: string[];
+  fastus_token_count?: number;
+  fastus_sentence_count?: number;
+  fastus_has_dependencies?: boolean;
+  fastus_entity_candidate_count?: number;
+  fastus_phrase_candidate_count?: number;
+  fastus_relation_candidate_count?: number;
+  fastus_claim_draft_count?: number;
+  fastus_llm_refined_count?: number;
+  fastus_llm_rejected_count?: number;
+  fastus_llm_cache_hit?: boolean;
+  fastus_events?: FastusDebugEventOut[];
 };
 
 export type SceneExtractionOut = {
@@ -149,6 +167,10 @@ export type SceneExtractionOut = {
   suppressed_structural_count?: number;
   generation_counts?: Record<string, number>;
   chunks?: ChunkExtractionDebugOut[];
+  fastus_spacy_available?: boolean;
+  fastus_stage0_negated_claims?: number;
+  fastus_stage0_rejected_fragments?: number;
+  fastus_events?: FastusDebugEventOut[];
 };
 
 export type SceneDetailOut = {
@@ -246,6 +268,12 @@ export type ValidationIssueOut = {
     | string;
   judge_confidence?: number;
   judge_reason?: string | null;
+  conflict_kind?: string | null;
+  conflicting_evidence_text?: string | null;
+  current_evidence_text?: string | null;
+  evidence_comparison?: string | null;
+  explanation?: string | null;
+  suggested_fix?: string | null;
   created_at: string;
 };
 
@@ -326,6 +354,32 @@ export async function fetchScene(
   return res.json() as Promise<SceneDetailOut>;
 }
 
+async function apiFetch(
+  input: string,
+  init?: RequestInit,
+): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (err) {
+    const msg =
+      err instanceof Error ? err.message : String(err);
+    if (
+      msg.includes("fetch failed") ||
+      msg.includes("ECONNRESET") ||
+      msg.includes("socket hang up") ||
+      err instanceof TypeError
+    ) {
+      throw new Error(
+        "Cannot reach the FastAPI backend (connection dropped or timed out). " +
+          "Chapter extraction with OpenAI can take 15–60s — wait and retry, or check the API terminal. " +
+          "Run API without `--reload` if saves fail mid-request. " +
+          "Ensure `apps/web/.env.local` has `API_PROXY_TARGET=http://127.0.0.1:8001` and restart `pnpm dev`.",
+      );
+    }
+    throw err;
+  }
+}
+
 export async function updateScene(
   storyId: number,
   sceneId: number,
@@ -337,7 +391,7 @@ export async function updateScene(
     run_extraction?: boolean;
   },
 ): Promise<SceneOut> {
-  const res = await fetch(`${apiBase()}/stories/${storyId}/scenes/${sceneId}`, {
+  const res = await apiFetch(`${apiBase()}/stories/${storyId}/scenes/${sceneId}`, {
     method: "PATCH",
     headers: await authHeaders(),
     body: JSON.stringify(body),

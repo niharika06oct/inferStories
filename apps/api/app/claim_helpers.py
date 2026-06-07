@@ -22,6 +22,7 @@ def claim_to_out(c: Claim) -> ClaimOut:
         subject=c.subject,
         predicate=c.predicate,
         object=c.claim_object,
+        polarity=getattr(c, "polarity", True),
         subject_entity_id=c.subject_entity_id,
         object_entity_id=c.object_entity_id,
         is_major_plotline=c.is_major_plotline,
@@ -44,4 +45,7 @@ def claim_to_out(c: Claim) -> ClaimOut:
         claim_version=c.claim_version,
         superseded_by_claim_id=c.superseded_by_claim_id,
         source_hash=c.source_hash,
+        valid_from_scene=getattr(c, "valid_from_scene", None),
+        valid_until_scene=getattr(c, "valid_until_scene", None),
+        confidence_history=getattr(c, "confidence_history", None),
     )

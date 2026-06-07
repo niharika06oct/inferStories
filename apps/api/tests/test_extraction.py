@@ -1,5 +1,7 @@
 """Automatic claim extraction on chapter save."""
 
+import pytest
+
 from app.extraction.chunking import chunk_chapter_text
 from app.extraction.extract import extract_claims_from_text, status_for_confidence
 
@@ -23,7 +25,8 @@ def test_status_for_confidence():
     assert status_for_confidence(0.5) == "suggested"
 
 
-def test_heuristic_extract_trust():
+def test_heuristic_extract_trust(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     text = "Asha trusts Rohan in the moonlit hall."
     result = extract_claims_from_text(text)
     assert result.source in ("heuristic", "hybrid")
@@ -37,6 +40,24 @@ def test_structural_entities_and_interaction():
     result = extract_claims_from_text(text)
     assert result.structural_entity_count >= 2
     assert any("Nahira" in e or "Ashan" in e for c in result.chunks for e in c.entities)
+
+
+def test_fastus_debug_instrumentation_on_extract(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    text = "Charlie was not my father. Bella did not trust Edward in Forks."
+    result = extract_claims_from_text(text, pov_character="Isabella Swan")
+    assert result.fastus_events
+    assert result.chunks[0].fastus_token_count > 0
+    assert result.chunks[0].fastus_entity_candidate_count >= 1
+    stages = {e.stage for e in result.fastus_events}
+    assert "0" in stages or "1" in stages
+    assert "1" in stages
+    assert "2" in stages
+    assert "3" in stages
+    assert "6" in stages
+    assert any(e.event == "parse" for e in result.fastus_events)
+    assert any(e.event == "llm_refine" for e in result.fastus_events)
+    assert any(e.event == "entity_candidates" for e in result.fastus_events)
 
 
 def test_auto_extract_on_scene_save(client):

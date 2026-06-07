@@ -111,6 +111,11 @@ GROUP_DISPLAY_ORDER = (
 CANON_WEIGHT = {"core": 1.2, "active": 1.0, "soft": 0.75}
 
 
+def _claim_is_asserted(claim: Claim) -> bool:
+    """Negated facts (polarity=false) are continuity signals, not positive graph edges."""
+    return getattr(claim, "polarity", True) is not False
+
+
 def _normalize_predicate(raw: str, claim_type: str | None, claim_text: str | None) -> str:
     p = (raw or "").strip().lower().replace(" ", "_")
     if p in _CLAIM_TYPE_SLUGS:
@@ -262,6 +267,8 @@ def build_relationship_graph(
 
     def _ingest(claim: Claim, scene_number: int, *, preview: bool) -> None:
         nonlocal max_scene, pending_canon
+        if not _claim_is_asserted(claim):
+            return
         if claim.status in PREVIEW_STATUSES:
             pending_canon += 1
         src, tgt = _resolve_entity_ids(db, story_id, claim, entity_by_id)
@@ -346,6 +353,7 @@ def build_relationship_graph(
                 "claim_text": text or None,
                 "confidence": conf,
                 "scene_number": scene_num,
+                "polarity": True,
             }
             for cid, pred, text, conf, scene_num in zip(
                 bucket.claim_ids,
@@ -405,7 +413,8 @@ def build_relationship_graph(
     approved_relationship_count = sum(
         1
         for c, _ in canon_rows
-        if _should_graph_edge(
+        if _claim_is_asserted(c)
+        and _should_graph_edge(
             c,
             src=_resolve_entity_ids(db, story_id, c, entity_by_id)[0],
             tgt=_resolve_entity_ids(db, story_id, c, entity_by_id)[1],

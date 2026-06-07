@@ -35,6 +35,7 @@ from app.schemas import (
     ValidationIssueOut,
     ValidationIssueStatusUpdate,
 )
+from app.nlp.fastus_debug import configure_fastus_logging
 from app.scene_service import save_scene_with_extraction
 
 
@@ -60,6 +61,12 @@ def validation_issue_to_out(issue: ValidationIssue) -> ValidationIssueOut:
         judge_classification=issue.judge_classification or "hard_contradiction",
         judge_confidence=issue.judge_confidence if issue.judge_confidence is not None else 1.0,
         judge_reason=issue.judge_reason,
+        conflict_kind=getattr(issue, "conflict_kind", None),
+        conflicting_evidence_text=getattr(issue, "conflicting_evidence_text", None),
+        current_evidence_text=getattr(issue, "current_evidence_text", None),
+        evidence_comparison=getattr(issue, "evidence_comparison", None),
+        explanation=getattr(issue, "explanation", None),
+        suggested_fix=getattr(issue, "suggested_fix", None),
         created_at=issue.created_at,
     )
 
@@ -76,6 +83,12 @@ async def lifespan(_app: FastAPI):
         await asyncio.to_thread(_run_alembic_upgrade)
         print("[startup] Alembic migrations finished.", flush=True)
     print("[startup] API ready — accepting requests.", flush=True)
+    if configure_fastus_logging():
+        print(
+            "[startup] FASTUS debug logging ON — stage lines appear on "
+            "Save & analyze memory (FASTUS_DEBUG=1).",
+            flush=True,
+        )
     yield
 
 
@@ -403,10 +416,10 @@ def update_scene(
             extraction=None,
         )
 
-    _, extraction = save_scene_with_extraction(
-        db, scene, payload.claims, run_extraction=True
-    )
     try:
+        _, extraction = save_scene_with_extraction(
+            db, scene, payload.claims, run_extraction=True
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -414,6 +427,12 @@ def update_scene(
             status_code=409,
             detail="Constraint violation while saving scene or claims",
         ) from None
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Chapter extraction failed: {exc}",
+        ) from exc
     db.refresh(scene)
     return SceneOut(
         id=scene.id,
@@ -531,6 +550,7 @@ def update_claim_status(
         claim_object=claim.claim_object,
         claim_type=claim.claim_type,
         claim_text=claim.claim_text,
+        polarity=getattr(claim, "polarity", True),
     )
     claim.subject = resolved.subject
     claim.predicate = resolved.predicate

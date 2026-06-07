@@ -6,9 +6,25 @@ import re
 
 from app.extraction.pov import resolve_narrator_subject
 from app.extraction.schema import ExtractedClaim
+from app.extraction.structural import has_identity_negation
 
 # Discovered cast anchors from full chapter (canonical_name -> aliases)
 CastMap = dict[str, str]
+
+_SENTENCE_SPLIT_RE = re.compile(r"[.!?]+")
+
+
+def _sentence_around(text: str, pos: int) -> str:
+    """Return the sentence containing character offset `pos`."""
+    start = 0
+    end = len(text)
+    for m in _SENTENCE_SPLIT_RE.finditer(text):
+        if m.end() <= pos:
+            start = m.end()
+        elif m.start() >= pos:
+            end = m.start()
+            break
+    return text[start:end].strip()
 
 
 def discover_cast_from_text(text: str) -> CastMap:
@@ -49,6 +65,8 @@ def family_extract_chunk(
         claim: str,
         evidence: str,
         confidence: float,
+        *,
+        polarity: bool = True,
     ) -> None:
         found.append(
             ExtractedClaim(
@@ -57,6 +75,7 @@ def family_extract_chunk(
                 predicate=predicate,
                 target=target,
                 claim=claim,
+                polarity=polarity,
                 confidence=confidence,
                 canon_level="active",
                 evidence=evidence[:200],
@@ -74,21 +93,26 @@ def family_extract_chunk(
             continue
         mom = _resolve_family_target("mom", cast, "Mom")
         subj = narrator
+        # "My mother was not Renée" denies the identity -> polarity False.
+        polarity = not has_identity_negation(_sentence_around(text, m.start()))
+        neg = "" if polarity else " not"
         add(
             subj,
             mom,
             "daughter_of",
-            f"{subj} is the daughter of {mom}.",
+            f"{subj} is{neg} the daughter of {mom}.",
             m.group(0),
             0.78,
+            polarity=polarity,
         )
         add(
             mom,
             subj,
             "mother_of",
-            f"{mom} is the mother of {subj}.",
+            f"{mom} is{neg} the mother of {subj}.",
             m.group(0),
             0.78,
+            polarity=polarity,
         )
 
     for m in re.finditer(
@@ -100,8 +124,27 @@ def family_extract_chunk(
             continue
         dad = (m.group(1) or "").strip() or _resolve_family_target("dad", cast, "Dad")
         subj = narrator
-        add(subj, dad, "daughter_of", f"{subj} is the daughter of {dad}.", m.group(0), 0.78)
-        add(dad, subj, "father_of", f"{dad} is the father of {subj}.", m.group(0), 0.78)
+        # "Charlie was not my father" denies the identity -> polarity False.
+        polarity = not has_identity_negation(_sentence_around(text, m.start()))
+        neg = "" if polarity else " not"
+        add(
+            subj,
+            dad,
+            "daughter_of",
+            f"{subj} is{neg} the daughter of {dad}.",
+            m.group(0),
+            0.78,
+            polarity=polarity,
+        )
+        add(
+            dad,
+            subj,
+            "father_of",
+            f"{dad} is{neg} the father of {subj}.",
+            m.group(0),
+            0.78,
+            polarity=polarity,
+        )
 
     for m in re.finditer(
         r"\b(?:she|Renée|Renee|my mother)\s+had\s+Phil\b",

@@ -50,6 +50,13 @@ _JUNK_SUBJECT_STARTS = re.compile(
     re.I,
 )
 
+# A subject that begins with an auxiliary/verb is a parse fragment, not an actor.
+# e.g. "did not trust him at all" -> subject "did".
+_AUXILIARY_SUBJECT_STARTS = re.compile(
+    r"^(?:did|does|do|was|were|had|have|has|is|are|am|will|would|could|should|can|not|never)\b",
+    re.I,
+)
+
 # Truncated structural matches: "I love getting full" with no real object.
 _INCOMPLETE_GERUND_OBJECT = re.compile(
     r"^(?:getting|being|having|making|taking|going|doing)\s+"
@@ -76,45 +83,47 @@ def _norm(s: str) -> str:
     return " ".join((s or "").strip().lower().split())
 
 
-def should_reject_extracted_claim(
+def reject_reason_for_claim(
     claim: ExtractedClaim,
     *,
     pov_character: str | None = None,
-) -> bool:
-    """Return True if this extraction should be dropped."""
+) -> str | None:
+    """Return a rejection reason, or None if the claim should be kept."""
     subj = _norm(claim.subject)
     tgt = _norm(claim.target)
     pred = _norm(claim.predicate).replace(" ", "_")
     ev = _norm(claim.evidence)
 
     if not subj:
-        return True
+        return "empty subject"
 
-    # Never persist the legacy "Narrator" placeholder as a real entity.
     if subj == "narrator" or tgt == "narrator":
-        return True
+        return "placeholder narrator entity"
 
-    # Unresolved first-person with no POV character cannot be attributed to anyone.
     if subj in _FIRST_PERSON_PLACEHOLDERS and not (pov_character or "").strip():
-        return True
+        return "unresolved first-person without POV character"
 
     if _JUNK_SUBJECT_STARTS.match(subj):
-        return True
+        return "junk subject start"
+
+    if _AUXILIARY_SUBJECT_STARTS.match(subj):
+        return "auxiliary/fragment subject (Stage 0)"
 
     if " way" in subj or subj.startswith("way "):
-        return True
+        return "junk 'way' subject"
 
     if subj in _PRONOUN_ONLY or subj in {"my mom", "the vigorous"}:
         if pred not in ("daughter_of", "son_of", "mother_of", "father_of"):
-            return True
+            return "unresolved pronoun subject"
 
-    if tgt in _PRONOUN_ONLY and pred not in (
+    tgt_head = tgt.split()[0] if tgt else ""
+    if tgt_head in _PRONOUN_ONLY and pred not in (
         "daughter_of",
         "son_of",
         "mother_of",
         "father_of",
     ):
-        return True
+        return "unresolved pronoun object (Stage 0 — no coref yet)"
 
     if tgt in _JUNK_OBJECT_FRAGMENTS or tgt in (
         "loved",
@@ -122,42 +131,70 @@ def should_reject_extracted_claim(
         "the vigorous",
         "the sun and",
     ):
-        return True
+        return "junk object fragment"
 
     if _INCOMPLETE_GERUND_OBJECT.match(tgt):
-        return True
+        return "incomplete gerund object"
 
     if pred in _WEAK_SPEECH_PREDICATES:
-        return True
+        return "weak speech predicate"
 
     if "said to me" in ev or "said to you" in ev:
-        return True
+        return "speech-evidence fragment"
 
     if pred in ("stares_at", "looks_at") and any(
         frag in tgt for frag in ("wide", "blue", "cheap", "vigorous")
     ):
-        return True
+        return "looks/stares junk object"
 
     if subj.startswith("tell "):
-        return True
+        return "tell-subject fragment"
 
-    return False
+    return None
+
+
+def should_reject_extracted_claim(
+    claim: ExtractedClaim,
+    *,
+    pov_character: str | None = None,
+) -> bool:
+    """Return True if this extraction should be dropped."""
+    return reject_reason_for_claim(claim, pov_character=pov_character) is not None
 
 
 def filter_extracted_claims(
     claims: list[ExtractedClaim],
     *,
     pov_character: str | None = None,
+    reject_events: list | None = None,
 ) -> list[ExtractedClaim]:
+    """Filter claims; optionally append Stage 0 reject events for FASTUS debug."""
+    from app.nlp.fastus_debug import emit
+
     out: list[ExtractedClaim] = []
     for c in claims:
-        if should_reject_extracted_claim(c, pov_character=pov_character):
-            continue
-        if c.predicate == "loves" and (c.target or "").lower() in (
+        reason = reject_reason_for_claim(c, pov_character=pov_character)
+        if reason is None and c.predicate == "loves" and (c.target or "").lower() in (
             "loved",
             "the vigorous",
             "the sun and",
         ):
+            reason = "junk loves target"
+        if reason is not None:
+            if reject_events is not None:
+                emit(
+                    reject_events,
+                    stage="0",
+                    event="reject_fragment",
+                    message=f"Dropped claim: {reason}",
+                    detail={
+                        "subject": c.subject,
+                        "predicate": c.predicate,
+                        "target": c.target or "",
+                        "evidence": (c.evidence or "")[:120],
+                        "reason": reason,
+                    },
+                )
             continue
         out.append(c)
     return out

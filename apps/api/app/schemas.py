@@ -42,6 +42,7 @@ class ClaimIn(BaseModel):
     subject: str
     predicate: str
     object: str
+    polarity: bool = True
     is_major_plotline: bool = False
     claim_type: Optional[str] = None
     claim_text: Optional[str] = None
@@ -71,6 +72,7 @@ class ClaimOut(BaseModel):
     subject: str
     predicate: str
     object: str
+    polarity: bool = True
     subject_entity_id: Optional[int] = None
     object_entity_id: Optional[int] = None
     is_major_plotline: bool
@@ -90,6 +92,9 @@ class ClaimOut(BaseModel):
     claim_version: int = 1
     superseded_by_claim_id: Optional[int] = None
     source_hash: Optional[str] = None
+    valid_from_scene: Optional[int] = None
+    valid_until_scene: Optional[int] = None
+    confidence_history: Optional[str] = None
 
 
 class GraphSupportingClaimOut(BaseModel):
@@ -148,6 +153,13 @@ class ClaimStatusUpdate(BaseModel):
     target: Optional[str] = None
 
 
+class FastusDebugEventOut(BaseModel):
+    stage: str
+    event: str
+    message: str
+    detail: dict[str, str] = Field(default_factory=dict)
+
+
 class ChunkExtractionDebugOut(BaseModel):
     chunk_index: int
     word_count: int
@@ -157,6 +169,17 @@ class ChunkExtractionDebugOut(BaseModel):
     structural_claims: int
     llm_claims: int
     entities: list[str] = Field(default_factory=list)
+    fastus_token_count: int = 0
+    fastus_sentence_count: int = 0
+    fastus_has_dependencies: bool = False
+    fastus_entity_candidate_count: int = 0
+    fastus_phrase_candidate_count: int = 0
+    fastus_relation_candidate_count: int = 0
+    fastus_claim_draft_count: int = 0
+    fastus_llm_refined_count: int = 0
+    fastus_llm_rejected_count: int = 0
+    fastus_llm_cache_hit: bool = False
+    fastus_events: list[FastusDebugEventOut] = Field(default_factory=list)
 
 
 class SceneExtractionOut(BaseModel):
@@ -176,6 +199,10 @@ class SceneExtractionOut(BaseModel):
     suppressed_structural_count: int = 0
     generation_counts: dict[str, int] = Field(default_factory=dict)
     chunks: list[ChunkExtractionDebugOut] = Field(default_factory=list)
+    fastus_spacy_available: bool = False
+    fastus_stage0_negated_claims: int = 0
+    fastus_stage0_rejected_fragments: int = 0
+    fastus_events: list[FastusDebugEventOut] = Field(default_factory=list)
 
 
 class SceneCreate(BaseModel):
@@ -217,6 +244,12 @@ class ValidationIssueOut(BaseModel):
     judge_classification: str = "hard_contradiction"
     judge_confidence: float = 1.0
     judge_reason: Optional[str] = None
+    conflict_kind: Optional[str] = None
+    conflicting_evidence_text: Optional[str] = None
+    current_evidence_text: Optional[str] = None
+    evidence_comparison: Optional[str] = None
+    explanation: Optional[str] = None
+    suggested_fix: Optional[str] = None
     created_at: datetime
 
 

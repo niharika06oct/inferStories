@@ -61,7 +61,7 @@ def claims(chapter: str):
         from app.extraction import extract as extract_mod
 
         def _no_llm(*_a, **_k):
-            return [], False, False, False
+            return [], False, False, False, 0, False, 0
 
         import pytest as pt
 

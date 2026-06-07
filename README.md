@@ -66,17 +66,23 @@ Use **port 8001** if something else (Docker, EDB, Django) already uses **8000**.
 
 ### Optional: AI features
 
-Add to `apps/api/.env` for OpenAI-backed synopses and optional semantic continuity judging. Without these settings, the app still runs with local heuristics and rule-only continuity validation.
+Add to `apps/api/.env` for OpenAI-backed synopses, claim extraction, and optional semantic continuity judging. Without these settings, the app still runs with local heuristics and rule-only continuity validation.
 
 ```env
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini
 # OPENAI_BASE_URL=https://api.openai.com/v1
 
+# FASTUS pipeline debug + LLM fallback (see docs/LLM_FASTUS_INTEGRATION_OPTIONS.md)
+# FASTUS_DEBUG=1       # Stage 0–9 lifecycle lines on API stderr at startup + on Save & analyze memory
+# FASTUS_LLM_LEGACY=1  # Full-chunk LLM extract when FASTUS claim drafts are empty
+
 # Optional: use AI only after rule-based continuity candidates are found.
 # CONTINUITY_AI_JUDGE_ENABLED=1
 # CONTINUITY_AI_MODEL=gpt-4o-mini
 ```
+
+Optional NLP: `python -m spacy download en_core_web_sm` (enables spaCy-backed FASTUS stages 1–4; regex fallback if missing).
 
 ## Run the web app
 
@@ -121,7 +127,9 @@ From `apps/api` with the venv active:
 pytest
 ```
 
-Tests use in-memory SQLite (`SKIP_ALEMBIC_ON_STARTUP=1`) and cover stories/scenes CRUD, entity resolution, claim extraction and dedupe, relationship graph output, continuity validation/judging, issue resolution, duplicate scene rejection, and description generation.
+Tests use in-memory SQLite (`SKIP_ALEMBIC_ON_STARTUP=1`) and cover stories/scenes CRUD, entity resolution, claim extraction and dedupe, FASTUS stages (parse, entities, phrases, relations, semantic patterns, LLM refine, merge, validation), relationship graph output, continuity validation/judging, issue resolution, duplicate scene rejection, and description generation.
+
+Use the project venv for pytest: `apps/api/.venv/bin/python -m pytest` (see `.cursor/rules/spacy-venv-python.mdc`).
 
 ## HTTP API
 
@@ -148,15 +156,39 @@ Tests use in-memory SQLite (`SKIP_ALEMBIC_ON_STARTUP=1`) and cover stories/scene
 
 **Claims** in JSON use the field **`object`** for the triple’s object slot (stored as `claim_object` in the DB).
 
+### FASTUS extraction pipeline (current)
+
+inferStories is evolving from regex + LLM toward a **FASTUS-inspired, deterministic-first** pipeline (reference: [`docs/FASTUS_ChatGPT.md`](docs/FASTUS_ChatGPT.md)). **Stages 0–9 are implemented and instrumented**; primary claim output today still comes from **structural + family regex** plus **Stage 6 LLM** (refine drafts or legacy full-chunk extract).
+
+| Stage | What it does |
+|-------|----------------|
+| **0** | Negation/polarity on claims, fragment rejection before persist |
+| **1** | Token/sentence parse (spaCy + regex fallback) |
+| **2** | Entity candidates (NER, proper nouns, registry aliases) |
+| **3** | Phrase candidates (noun/verb/possessive/family, negation flags) |
+| **4** | Relation candidates (SVO, coreference MVP) |
+| **5** | Semantic patterns → claim drafts |
+| **6** | LLM **refine** drafts; `FASTUS_LLM_LEGACY=1` → full-chunk extract when drafts empty |
+| **7** | Polarity-aware merge, cross-scene canon suppress, stale claim prune on re-save |
+| **8** | Polarity-aware continuity validation + relationship graph |
+| **9** | Validation issue enrichment (both-side evidence, explanation, suggested fix) |
+
+**Shadow vs primary:** Stages 1–5 run on every **Save & analyze memory** and populate the **Extraction details** panel (`FastusDebugSection`). Regex layers still drive most persisted claims until FASTUS promotion.
+
+**Debug:** Set `FASTUS_DEBUG=1` — API startup prints a banner; stage BEGIN/COMPLETE/SKIP lines appear in the **uvicorn terminal** on analyze (not autosave).
+
+**Next direction:** How to combine LLM recall with FASTUS grounding — three options in [`docs/LLM_FASTUS_INTEGRATION_OPTIONS.md`](docs/LLM_FASTUS_INTEGRATION_OPTIONS.md) for review.
+
 ### Continuity memory
 
 When a scene is saved or updated with extraction enabled, inferStories:
 
-1. Extracts claims from structural patterns, family/relationship language, optional LLM output, and heuristic fallbacks.
+1. Extracts claims from structural patterns, family/relationship language, FASTUS drafts (refined by LLM when present), optional legacy full-chunk LLM, and heuristic fallbacks.
 2. Resolves subjects and objects to canonical story entities where possible, including aliases like short names and nicknames.
 3. Filters placeholder or unresolved entities such as `Narrator` and unresolved first-person pronouns when no POV character is known.
-4. Compares current claims against accepted claims from **earlier** scenes.
-5. Saves persisted `ValidationIssue` rows with evidence anchors, conflicting claim references, resolution status, and judge metadata.
+4. Prunes stale extracted claims when chapter text changes; suppresses duplicates already canonized in earlier chapters.
+5. Compares current claims against accepted claims from **earlier** scenes (polarity-aware).
+6. Saves persisted `ValidationIssue` rows with evidence anchors, conflicting claim references, resolution status, judge metadata, and enriched explanations.
 
 Continuity checking is intentionally conservative. It focuses on explicit incompatible objects and explicit predicate oppositions, and treats emotional progression more carefully. For example, "uncomfortable with" is not automatically treated as "distrusts." Optional AI judging can classify rule candidates as `hard_contradiction`, `soft_tension`, `compatible_progression`, or `not_issue`; only hard contradictions and soft tensions are shown.
 
@@ -207,7 +239,7 @@ flowchart TB
 
     subgraph Backend["apps/api — FastAPI :8001"]
         API["REST: stories · scenes · claims · entities · validate"]
-        Extract["Claim extraction<br/>structural · family · OpenAI · heuristic"]
+        Extract["Claim extraction<br/>FASTUS 0–9 · structural · family · LLM refine"]
         Registry["Entity registry<br/>canonical names · aliases · graph eligibility"]
         Canon["Continuity judge<br/>rules first · optional AI for ambiguous candidates"]
     end
@@ -263,8 +295,9 @@ flowchart TD
 
     subgraph Extract["API — extraction on analyze"]
         Analyze --> Chunk[Chunk long chapters]
-        Chunk --> Structural[Structural + family patterns<br/>POV-aware I → character]
-        Chunk --> LLM[OpenAI if configured<br/>else heuristic fallback]
+        Chunk --> Fastus[FASTUS 1–5 shadow<br/>parse · entities · relations · drafts]
+        Chunk --> Structural[Structural + family regex<br/>POV-aware I → character]
+        Fastus --> LLM[Stage 6 LLM refine drafts<br/>or FASTUS_LLM_LEGACY full extract]
         Structural --> Registry[Resolve canonical entities<br/>aliases · no Narrator placeholders]
         LLM --> Registry
         Registry --> StoreClaims[(Save claims with status)]
@@ -323,10 +356,12 @@ flowchart LR
 
 Planned next steps:
 
+- **FASTUS promotion:** pick LLM+FASTUS integration (see [`docs/LLM_FASTUS_INTEGRATION_OPTIONS.md`](docs/LLM_FASTUS_INTEGRATION_OPTIONS.md)); promote stages 1–5 from shadow to primary extractor.
 - **Background jobs:** claim extraction / heavy validation on a **Redis-backed queue**.
 - **Realtime:** **SSE or WebSocket** push for new issues instead of only polling.
 - **Cloud import:** direct connectors (Google Drive, Notion, etc.) without manual export.
-- **Issues model:** dedupe keys, stable references to conflicting pairs, richer editor payloads.
+
+Longer-term product roadmap: [`docs/MEGA_SERIES_ROADMAP.md`](docs/MEGA_SERIES_ROADMAP.md).
 
 ---
 

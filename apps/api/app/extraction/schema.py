@@ -38,6 +38,10 @@ class ExtractedClaim(BaseModel):
     )
     target: str = Field(default="", max_length=255)
     claim: str = Field(min_length=1)
+    polarity: bool = Field(
+        default=True,
+        description="False when the source text negates the fact (e.g. 'was not my father').",
+    )
     confidence: float = Field(ge=0.0, le=1.0)
     canon_level: CanonLevel = "active"
     evidence: str = Field(min_length=1, max_length=500)
@@ -46,6 +50,13 @@ class ExtractedClaim(BaseModel):
         default="structural",
         description="Pipeline step that produced this claim (structural, family, llm, heuristic).",
     )
+
+
+class FastusDebugEventOut(BaseModel):
+    stage: str
+    event: str
+    message: str
+    detail: dict[str, str] = Field(default_factory=dict)
 
 
 class ChunkExtractionDebug(BaseModel):
@@ -57,6 +68,18 @@ class ChunkExtractionDebug(BaseModel):
     structural_claims: int = 0
     llm_claims: int = 0
     entities: list[str] = Field(default_factory=list)
+    # FASTUS stages 1–2 (shadow path — not yet primary extractor)
+    fastus_token_count: int = 0
+    fastus_sentence_count: int = 0
+    fastus_has_dependencies: bool = False
+    fastus_entity_candidate_count: int = 0
+    fastus_phrase_candidate_count: int = 0
+    fastus_relation_candidate_count: int = 0
+    fastus_claim_draft_count: int = 0
+    fastus_llm_refined_count: int = 0
+    fastus_llm_rejected_count: int = 0
+    fastus_llm_cache_hit: bool = False
+    fastus_events: list[FastusDebugEventOut] = Field(default_factory=list)
 
 
 class ExtractionResult(BaseModel):
@@ -72,3 +95,8 @@ class ExtractionResult(BaseModel):
     large_chapter_warning: bool = False
     structural_entity_count: int = 0
     chunks: list[ChunkExtractionDebug] = Field(default_factory=list)
+    # FASTUS summary across stages 0–2
+    fastus_spacy_available: bool = False
+    fastus_stage0_negated_claims: int = 0
+    fastus_stage0_rejected_fragments: int = 0
+    fastus_events: list[FastusDebugEventOut] = Field(default_factory=list)

@@ -87,7 +87,7 @@ def no_openai(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OPENAI_API_KEY", "")
 
     def _no_llm(*_a, **_k):
-        return [], False, False, False
+        return [], False, False, False, 0, False, 0
 
     from app.extraction import extract as extract_mod
 

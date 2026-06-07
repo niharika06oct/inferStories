@@ -26,6 +26,7 @@ class ResolvedClaimFields:
     subject_entity_id: int
     object_entity_id: int | None
     source_hash: str
+    polarity: bool = True
 
 
 def resolve_extracted(
@@ -89,6 +90,7 @@ def resolve_extracted(
         predicate,
         obj_ent.id if obj_ent else None,
         claim_type,
+        polarity=extracted.polarity,
     )
     return ResolvedClaimFields(
         subject=subj_ent.canonical_name,
@@ -98,6 +100,7 @@ def resolve_extracted(
         subject_entity_id=subj_ent.id,
         object_entity_id=obj_ent.id if obj_ent else None,
         source_hash=source_hash,
+        polarity=extracted.polarity,
     )
 
 
@@ -110,6 +113,7 @@ def resolve_manual(
     claim_object: str,
     claim_type: str | None,
     claim_text: str | None,
+    polarity: bool = True,
 ) -> ResolvedClaimFields:
     context = (claim_text or f"{subject} {predicate} {claim_object}").strip()
     ct_in = (claim_type or "relationship_state").strip()
@@ -151,6 +155,7 @@ def resolve_manual(
         pred,
         obj_ent.id if obj_ent else None,
         ct,
+        polarity=polarity,
     )
     return ResolvedClaimFields(
         subject=subj_ent.canonical_name,
@@ -160,20 +165,24 @@ def resolve_manual(
         subject_entity_id=subj_ent.id,
         object_entity_id=obj_ent.id if obj_ent else None,
         source_hash=source_hash,
+        polarity=polarity,
     )
 
 
 def rehash_claim_row(claim: Claim) -> str:
+    polarity = getattr(claim, "polarity", True)
     if claim.subject_entity_id:
         return compute_entity_source_hash(
             claim.subject_entity_id,
             claim.predicate,
             claim.object_entity_id,
             claim.claim_type or "",
+            polarity=polarity,
         )
     return source_hash_for_claim_row(
         claim.subject,
         claim.predicate,
         claim.claim_object,
         claim.claim_type,
+        polarity=polarity,
     )

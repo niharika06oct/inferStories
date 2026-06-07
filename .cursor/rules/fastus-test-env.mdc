@@ -1,0 +1,38 @@
+---
+description: FASTUS/API test env — use .venv Python and isolate pytest from apps/api .env
+alwaysApply: true
+---
+
+# FASTUS / API testing — env isolation
+
+When verifying FASTUS stages or running `apps/api` tests:
+
+## Python interpreter
+
+- Use `apps/api/.venv/bin/python`, not bare anaconda `python`.
+- See `.cursor/rules/spacy-venv-python.mdc` for why (spaCy lives in `.venv`).
+
+```bash
+cd apps/api
+.venv/bin/python -m pytest -q
+```
+
+## `.env` leaks into pytest
+
+`apps/api/app/database.py` calls `load_dotenv(apps/api/.env, override=True)` at import time. Local dev settings therefore affect pytest unless isolated.
+
+Notable vars that can skew tests:
+
+- `CONTINUITY_AI_JUDGE_ENABLED=1` — enables OpenAI second-pass on `predicate_opposition` continuity candidates; tests expecting `judge_source == "rules"` may fail with `fallback` if the AI call is attempted and fails.
+- `OPENAI_API_KEY` — required for the continuity AI judge path when the flag above is on.
+
+**Stage 0 polarity flips** (`conflict_kind=polarity_flip`) are rule-only and unaffected. **Predicate opposition** tests (e.g. trusts vs distrusts) are affected.
+
+## Local dev vs test verification
+
+- **Dev UI:** OK to keep `CONTINUITY_AI_JUDGE_ENABLED=1` in `apps/api/.env` for softer continuity in the product.
+- **FASTUS / extraction / validation test runs:** isolate from `.env` when results look wrong or flaky:
+  - temporarily move/rename `.env` for the pytest run, or
+  - monkeypatch/unset `CONTINUITY_AI_JUDGE_ENABLED` in tests that assert rule-only behavior.
+
+Do not assume a green suite on bare `python -m pytest` with `.env` present equals a clean FASTUS verification run.

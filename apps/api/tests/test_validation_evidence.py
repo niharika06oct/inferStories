@@ -1,5 +1,9 @@
 from app.models import Claim
-from app.validation_evidence import continuity_anchor_in_scene, evidence_offset_in_scene
+from app.validation_evidence import (
+    claim_anchored_in_scene,
+    continuity_anchor_in_scene,
+    evidence_offset_in_scene,
+)
 
 
 def test_continuity_anchor_finds_evidence_quote():
@@ -61,3 +65,31 @@ def test_evidence_offset_finds_quote():
         evidence_text="I detested Forks",
     )
     assert evidence_offset_in_scene(text, claim) == text.lower().index("i detested")
+
+
+def test_claim_anchored_requires_evidence_not_object_fallback():
+    text = "Edward leaned against the Volvo."
+    claim = Claim(
+        story_id=1,
+        scene_id=1,
+        subject="Isabella Swan",
+        predicate="loves",
+        claim_object="Edward Cullen",
+        evidence_text="He loved me openly, trusted me completely.",
+        claim_text="Isabella Swan loves Edward Cullen.",
+    )
+    assert continuity_anchor_in_scene(text, claim)[0] >= 0  # object fallback
+    assert claim_anchored_in_scene(text, claim) is False
+
+
+def test_claim_anchored_true_when_evidence_present():
+    text = "He loved me openly, trusted me completely. Rain fell."
+    claim = Claim(
+        story_id=1,
+        scene_id=1,
+        subject="Isabella Swan",
+        predicate="loves",
+        claim_object="Edward Cullen",
+        evidence_text="He loved me openly, trusted me completely.",
+    )
+    assert claim_anchored_in_scene(text, claim) is True

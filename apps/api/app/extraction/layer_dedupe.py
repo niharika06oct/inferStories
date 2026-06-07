@@ -90,6 +90,28 @@ def _structural_redundant_with_llm(structural: ExtractedClaim, llm: ExtractedCla
     return False
 
 
+def llm_redundant_with_rule_claims(
+    llm: ExtractedClaim,
+    rule_claims: list[ExtractedClaim],
+) -> bool:
+    """True when a rule-layer claim already expresses the same fact as this LLM claim."""
+    return any(_structural_redundant_with_llm(rule, llm) for rule in rule_claims)
+
+
+def filter_redundant_llm_claims(
+    llm_claims: list[ExtractedClaim],
+    rule_claims: list[ExtractedClaim],
+) -> list[ExtractedClaim]:
+    """Drop FASTUS/LLM claims duplicated by structural or family extractions."""
+    if not llm_claims or not rule_claims:
+        return llm_claims
+    return [
+        c
+        for c in llm_claims
+        if not llm_redundant_with_rule_claims(c, rule_claims)
+    ]
+
+
 def suppress_redundant_structural_claims(
     claims: list[ExtractedClaim],
     *,

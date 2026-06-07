@@ -65,7 +65,9 @@ class Scene(Base):
     )
     story: Mapped["Story"] = relationship(back_populates="scenes")
     claims: Mapped[list["Claim"]] = relationship(
-        back_populates="scene", cascade="all, delete-orphan"
+        back_populates="scene",
+        cascade="all, delete-orphan",
+        foreign_keys="Claim.scene_id",
     )
     issues: Mapped[list["ValidationIssue"]] = relationship(
         back_populates="scene", cascade="all, delete-orphan"
@@ -86,6 +88,8 @@ class Claim(Base):
     predicate: Mapped[str] = mapped_column(String(255), nullable=False)
     # Column name "object" in SQL; avoid shadowing Python builtin `object`.
     claim_object: Mapped[str] = mapped_column("object", String(255), nullable=False)
+    # False encodes a negated fact ("Charlie was not my father" -> father_of, polarity False).
+    polarity: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     subject_entity_id: Mapped[int | None] = mapped_column(
         ForeignKey("entities.id", ondelete="SET NULL"),
         index=True,
@@ -127,7 +131,20 @@ class Claim(Base):
         nullable=True,
     )
     source_hash: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
-    scene: Mapped["Scene"] = relationship(back_populates="claims")
+    # FASTUS Stage 7: optional temporal validity for state transitions within a story.
+    valid_from_scene: Mapped[int | None] = mapped_column(
+        ForeignKey("scenes.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    valid_until_scene: Mapped[int | None] = mapped_column(
+        ForeignKey("scenes.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    confidence_history: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scene: Mapped["Scene"] = relationship(
+        back_populates="claims",
+        foreign_keys=[scene_id],
+    )
 
 
 class ValidationIssue(Base):
@@ -165,6 +182,12 @@ class ValidationIssue(Base):
     )
     judge_confidence: Mapped[float] = mapped_column(default=1.0, nullable=False)
     judge_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conflict_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    conflicting_evidence_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    current_evidence_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_comparison: Mapped[str | None] = mapped_column(Text, nullable=True)
+    explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    suggested_fix: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )

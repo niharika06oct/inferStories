@@ -144,6 +144,130 @@ def test_graph_excludes_non_character_love_object():
         db.close()
 
 
+def test_graph_skips_negated_family_relation():
+    db = _session()
+    try:
+        story = Story(title="Neg", description=None, owner_user_id="u")
+        db.add(story)
+        db.flush()
+        scene = Scene(story_id=story.id, scene_number=1, text="x")
+        db.add(scene)
+        db.flush()
+
+        charlie = Entity(
+            story_id=story.id,
+            canonical_name="Charlie",
+            entity_type="character",
+            graph_eligible=True,
+        )
+        bella = Entity(
+            story_id=story.id,
+            canonical_name="Bella",
+            entity_type="character",
+            graph_eligible=True,
+        )
+        db.add_all([charlie, bella])
+        db.flush()
+
+        db.add(
+            Claim(
+                story_id=story.id,
+                scene_id=scene.id,
+                subject="Charlie",
+                predicate="father_of",
+                claim_object="Bella",
+                subject_entity_id=charlie.id,
+                object_entity_id=bella.id,
+                claim_type="relationship_state",
+                claim_text="Charlie was not Bella's father.",
+                polarity=False,
+                status="approved",
+                confidence=0.9,
+            )
+        )
+        db.commit()
+
+        graph = build_relationship_graph(db, story.id)
+        assert graph["edges"] == []
+        assert graph["meta"]["approved_relationship_claim_count"] == 0
+    finally:
+        db.close()
+
+
+def test_graph_skips_negated_trust_but_keeps_positive():
+    db = _session()
+    try:
+        story = Story(title="Trust", description=None, owner_user_id="u")
+        db.add(story)
+        db.flush()
+        scene = Scene(story_id=story.id, scene_number=1, text="x")
+        db.add(scene)
+        db.flush()
+
+        asha = Entity(
+            story_id=story.id,
+            canonical_name="Asha",
+            entity_type="character",
+            graph_eligible=True,
+        )
+        rohan = Entity(
+            story_id=story.id,
+            canonical_name="Rohan",
+            entity_type="character",
+            graph_eligible=True,
+        )
+        stefan = Entity(
+            story_id=story.id,
+            canonical_name="Stefan",
+            entity_type="character",
+            graph_eligible=True,
+        )
+        db.add_all([asha, rohan, stefan])
+        db.flush()
+
+        db.add_all(
+            [
+                Claim(
+                    story_id=story.id,
+                    scene_id=scene.id,
+                    subject="Asha",
+                    predicate="trusts",
+                    claim_object="Rohan",
+                    subject_entity_id=asha.id,
+                    object_entity_id=rohan.id,
+                    claim_type="relationship_state",
+                    polarity=True,
+                    status="approved",
+                    confidence=0.9,
+                ),
+                Claim(
+                    story_id=story.id,
+                    scene_id=scene.id,
+                    subject="Asha",
+                    predicate="trusts",
+                    claim_object="Stefan",
+                    subject_entity_id=asha.id,
+                    object_entity_id=stefan.id,
+                    claim_type="relationship_state",
+                    polarity=False,
+                    claim_text="Asha did not trust Stefan.",
+                    status="approved",
+                    confidence=0.85,
+                ),
+            ]
+        )
+        db.commit()
+
+        graph = build_relationship_graph(db, story.id)
+        assert len(graph["edges"]) == 1
+        edge = graph["edges"][0]
+        assert edge["target_entity_id"] == rohan.id
+        assert edge["sub_relationships"] == ["trusts"]
+        assert edge["supporting_claims"][0]["polarity"] is True
+    finally:
+        db.close()
+
+
 def test_graph_endpoint(client):
     r = client.post("/stories", json={"title": "Graph API"})
     sid = r.json()["id"]

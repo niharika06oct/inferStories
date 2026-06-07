@@ -25,6 +25,7 @@ def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SKIP_ALEMBIC_ON_STARTUP", "1")
     monkeypatch.setenv("AUTH_DISABLED", "1")
     monkeypatch.setenv("AUTH_DEV_USER_ID", "test-user")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
 
     engine = create_engine(
         "sqlite://",

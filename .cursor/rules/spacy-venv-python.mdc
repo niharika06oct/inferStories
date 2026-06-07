@@ -1,0 +1,29 @@
+---
+description: Run API tests and spaCy code via apps/api .venv Python, not bare anaconda python
+alwaysApply: true
+---
+
+# spaCy / API tests — use `.venv/bin/python`
+
+For `apps/api` (spaCy, NLP pipeline, pytest):
+
+- **Always run Python and pytest via** `apps/api/.venv/bin/python`, **not** bare `python` from anaconda.
+- `.venv/bin/python` symlinks to anaconda's interpreter but uses `.venv` site-packages where `spacy` and `en_core_web_sm` are installed.
+- Bare `python` / `python -m pytest` will miss spaCy and exercise only the regex fallback in `chapter_parse.py`.
+
+Examples:
+
+```bash
+cd apps/api
+.venv/bin/python -m pytest tests/test_chapter_parse.py -q
+.venv/bin/python -m pytest -q
+.venv/bin/python -c "from app.nlp.chapter_parse import is_spacy_available; print(is_spacy_available())"
+```
+
+When installing spaCy or models, target the venv:
+
+```bash
+cd apps/api
+.venv/bin/python -m pip install "spacy>=3.7"
+.venv/bin/python -m spacy download en_core_web_sm
+```

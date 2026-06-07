@@ -79,13 +79,33 @@ export function ContinuityIssuesList({
             </span>
           </div>
           <p className="mt-2 text-sm leading-6">{iss.message}</p>
-          {iss.judge_reason ? (
+          {iss.evidence_comparison ? (
+            <p className="mt-2 rounded-md bg-muted/35 px-2 py-1.5 text-[11px] leading-5 text-muted-foreground">
+              <span className="font-medium text-foreground">Evidence:</span>{" "}
+              {iss.evidence_comparison}
+            </p>
+          ) : null}
+          {iss.explanation ? (
+            <p className="mt-2 rounded-md bg-muted/35 px-2 py-1.5 text-[11px] leading-5 text-muted-foreground">
+              <span className="font-medium text-foreground">Explanation:</span>{" "}
+              {iss.explanation}
+              {iss.judge_source ? (
+                <span className="ml-1 opacity-75">({iss.judge_source})</span>
+              ) : null}
+            </p>
+          ) : iss.judge_reason ? (
             <p className="mt-2 rounded-md bg-muted/35 px-2 py-1.5 text-[11px] leading-5 text-muted-foreground">
               <span className="font-medium text-foreground">Reason:</span>{" "}
               {iss.judge_reason}
               {iss.judge_source ? (
                 <span className="ml-1 opacity-75">({iss.judge_source})</span>
               ) : null}
+            </p>
+          ) : null}
+          {iss.suggested_fix ? (
+            <p className="mt-2 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-5 text-amber-100/90">
+              <span className="font-medium">Suggested fix:</span>{" "}
+              {iss.suggested_fix}
             </p>
           ) : null}
           {showResolveActions && onResolve ? (

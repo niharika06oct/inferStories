@@ -58,3 +58,28 @@ def evidence_offset_in_scene(scene_text: str, claim: Claim) -> int:
     """Character offset in scene_text; 0 if anchor not found."""
     offset, _, _ = continuity_anchor_in_scene(scene_text, claim)
     return offset
+
+
+def claim_anchored_in_scene(scene_text: str, claim: Claim) -> bool:
+    """
+    True when the claim's evidence or claim_text still appears in the chapter.
+
+    Stricter than continuity_anchor_in_scene: does not fall back to object-name
+    alone, so a removed sentence does not leave a stale loves/trusts row alive.
+    """
+    text = (scene_text or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    for field in (claim.evidence_text, claim.claim_text):
+        quote = (field or "").strip()
+        if not quote:
+            continue
+        anchor = quote[:500]
+        if lowered.find(anchor.lower()) >= 0:
+            return True
+        if len(anchor) > 48:
+            short = anchor[:48].strip()
+            if lowered.find(short.lower()) >= 0:
+                return True
+    return False
