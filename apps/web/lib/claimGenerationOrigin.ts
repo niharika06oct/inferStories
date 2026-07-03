@@ -3,14 +3,18 @@ export type ClaimGenerationOrigin =
   | "structural"
   | "family"
   | "llm"
+  | "llm_recall"
+  | "fastus"
   | "heuristic"
   | "manual"
   | "unknown";
 
-const LABELS: Record<ClaimGenerationOrigin, string> = {
+const LABELS: Record<string, string> = {
   structural: "Rules · pattern",
   family: "Rules · family",
-  llm: "AI (LLM)",
+  llm: "AI (LLM refine)",
+  llm_recall: "AI · recall",
+  fastus: "FASTUS grounded",
   heuristic: "Fallback",
   manual: "Manual",
   unknown: "Unknown",
@@ -18,7 +22,13 @@ const LABELS: Record<ClaimGenerationOrigin, string> = {
 
 export function labelForGenerationOrigin(origin: string | undefined): string {
   if (!origin) return LABELS.unknown;
-  return LABELS[origin as ClaimGenerationOrigin] ?? origin;
+  if (origin.includes("+")) {
+    return origin
+      .split("+")
+      .map((part) => LABELS[part.trim()] ?? part.trim())
+      .join(" + ");
+  }
+  return LABELS[origin] ?? origin;
 }
 
 export function formatClaimTimestamp(iso: string | null | undefined): string | null {

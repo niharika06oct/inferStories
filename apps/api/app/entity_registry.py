@@ -14,6 +14,7 @@ from app.entity_classification import (
     classify_entity_surface,
     compute_graph_eligible,
 )
+from app.location_compatibility import classify_place_granularity
 from app.models import Entity
 
 # Re-export for callers
@@ -193,6 +194,11 @@ def get_or_create_entity(
         )
 
     graph_eligible = compute_graph_eligible(entity_type, type_conf)
+    place_granularity = None
+    if entity_type == "place":
+        place_granularity = classify_place_granularity(
+            cleaned, evidence=evidence or sentence
+        )
 
     existing = find_entity_by_name(db, story_id, cleaned)
     if existing is not None:
@@ -219,12 +225,18 @@ def get_or_create_entity(
             set_aliases(existing, merged)
         elif extra_aliases:
             set_aliases(existing, aliases_list(existing) + extra_aliases)
+        if entity_type == "place" and place_granularity:
+            if not getattr(existing, "place_granularity", None):
+                existing.place_granularity = place_granularity
+            elif place_granularity in ("city", "residence", "institution") and existing.place_granularity == "unknown":
+                existing.place_granularity = place_granularity
         return existing
 
     ent = Entity(
         story_id=story_id,
         canonical_name=cleaned,
         entity_type=entity_type,
+        place_granularity=place_granularity if entity_type == "place" else None,
         type_confidence=type_conf,
         graph_eligible=graph_eligible,
         aliases=None,

@@ -3,6 +3,7 @@ from app.validation_evidence import (
     claim_anchored_in_scene,
     continuity_anchor_in_scene,
     evidence_offset_in_scene,
+    locate_claim_evidence_span,
 )
 
 
@@ -80,6 +81,88 @@ def test_claim_anchored_requires_evidence_not_object_fallback():
     )
     assert continuity_anchor_in_scene(text, claim)[0] >= 0  # object fallback
     assert claim_anchored_in_scene(text, claim) is False
+
+
+def test_locate_span_paraphrased_llm_evidence():
+    """LLM recall may store a claim sentence; highlight should find the real quote."""
+    text = (
+        "Charlie was not my father. He was a stranger.\n"
+        "I did not trust him at all."
+    )
+    off, length, anchor = locate_claim_evidence_span(
+        text,
+        evidence_text="Charlie is not the father of Isabella Swan.",
+        claim_text="Charlie is not the father of Isabella Swan.",
+    )
+    assert off >= 0
+    assert length > 0
+    assert "charlie was not my father" in anchor.lower()
+
+
+def test_locate_span_does_not_use_subject_name():
+    text = "Isabella Swan arrived. Charlie was not my father."
+    off, length, _ = locate_claim_evidence_span(
+        text,
+        evidence_text="",
+        claim_text="The weather remained cloudy all afternoon.",
+        claim_object="",
+    )
+    assert off < 0 and length == 0
+
+
+def test_multi_sentence_evidence_prefers_relevant_sentence():
+    """Long LLM evidence blobs should anchor to the supporting sentence, not a prefix."""
+    text = (
+        "After two classes, I started to recognize several of the faces in each class. "
+        "People asked me questions about how I was liking Forks."
+    )
+    off, length, anchor = locate_claim_evidence_span(
+        text,
+        evidence_text=(
+            "I started to recognize several of the faces in each class. "
+            "People asked me questions about how I was liking Forks."
+        ),
+        claim_text="Bella is currently living in Forks.",
+        claim_object="Forks",
+        claim_subject="Bella",
+    )
+    assert off >= 0
+    assert "forks" in anchor.lower()
+    assert "recognize" not in anchor.lower()
+
+
+def test_token_overlap_requires_entity_token():
+    text = (
+        "After two classes, I started to recognize several of the faces in each class. "
+        "People asked me questions about how I was liking Forks."
+    )
+    off, length, anchor = locate_claim_evidence_span(
+        text,
+        evidence_text="Bella is currently living in Forks.",
+        claim_text="Bella is currently living in Forks.",
+        claim_object="Forks",
+        claim_subject="Bella",
+    )
+    assert off >= 0
+    assert "forks" in anchor.lower()
+
+
+def test_short_evidence_expands_to_sentence():
+    text = (
+        'The door opened and a receptionist greeted me. '
+        '"Fine," I lied, my voice weak.'
+    )
+    off, length, anchor = locate_claim_evidence_span(
+        text,
+        evidence_text="receptionist",
+        claim_text="Isabella Swan lies to the receptionist about her first day.",
+        claim_object="receptionist",
+        claim_subject="Isabella Swan",
+    )
+    assert off >= 0
+    assert "receptionist" in anchor.lower()
+    assert length >= 20
+    assert "lied" in anchor.lower() or "greeted" in anchor.lower()
 
 
 def test_claim_anchored_true_when_evidence_present():

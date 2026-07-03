@@ -20,6 +20,16 @@ def pytest_configure(config):
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_extraction_env(monkeypatch: pytest.MonkeyPatch):
+    """Prevent apps/api/.env from turning tests into live OpenAI / LLM-first runs."""
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("FASTUS_LLM_LEGACY", "0")
+    monkeypatch.setenv("FASTUS_LLM_FIRST", "0")
+    monkeypatch.setenv("FASTUS_LLM_REFINE", "0")
+    monkeypatch.setenv("CONTINUITY_AI_JUDGE_ENABLED", "0")
+
+
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SKIP_ALEMBIC_ON_STARTUP", "1")

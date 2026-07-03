@@ -2,6 +2,7 @@ import json
 
 from app.models import Claim
 from app.schemas import ClaimOut
+from app.validation_evidence import claim_anchored_in_scene, locate_claim_evidence_span
 
 
 def _aliases_for_out(raw: str | None) -> list[str]:
@@ -16,7 +17,23 @@ def _aliases_for_out(raw: str | None) -> list[str]:
     return []
 
 
-def claim_to_out(c: Claim) -> ClaimOut:
+def claim_to_out(c: Claim, *, scene_text: str | None = None) -> ClaimOut:
+    evidence_anchored = (
+        claim_anchored_in_scene(scene_text, c) if scene_text else None
+    )
+    evidence_offset: int | None = None
+    evidence_length: int | None = None
+    if scene_text:
+        off, length, _anchor = locate_claim_evidence_span(
+            scene_text,
+            evidence_text=c.evidence_text,
+            claim_text=c.claim_text,
+            claim_object=c.claim_object,
+            claim_subject=c.subject,
+        )
+        if off >= 0 and length > 0:
+            evidence_offset = off
+            evidence_length = length
     return ClaimOut(
         id=c.id,
         subject=c.subject,
@@ -48,4 +65,7 @@ def claim_to_out(c: Claim) -> ClaimOut:
         valid_from_scene=getattr(c, "valid_from_scene", None),
         valid_until_scene=getattr(c, "valid_until_scene", None),
         confidence_history=getattr(c, "confidence_history", None),
+        evidence_anchored=evidence_anchored,
+        evidence_offset=evidence_offset,
+        evidence_length=evidence_length,
     )

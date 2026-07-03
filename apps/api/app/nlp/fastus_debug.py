@@ -32,6 +32,7 @@ STAGE_LABELS: dict[str, str] = {
     "4": "relation candidates",
     "5": "semantic patterns → claim drafts",
     "6": "LLM refinement",
+    "6a": "LLM recall (major claims)",
     "7": "polarity-aware merge + stale prune",
     "8": "continuity validation",
     "9": "issue enrichment (evidence + fix)",

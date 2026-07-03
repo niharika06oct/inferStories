@@ -128,6 +128,12 @@ function ClaimCard({
       </div>
       <p className="mt-1.5 text-[10px] text-muted-foreground/90">
         <span className="font-medium text-muted-foreground">{originLabel}</span>
+        {claim.evidence_anchored != null ? (
+          <>
+            {" "}
+            · anchored {claim.evidence_anchored ? "yes" : "no"}
+          </>
+        ) : null}
         {extractedWhen ? (
           <>
             {" "}

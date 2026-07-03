@@ -112,6 +112,9 @@ export type ClaimOut = {
   evidence_text?: string | null;
   source: string;
   generation_origin?: string;
+  evidence_anchored?: boolean | null;
+  evidence_offset?: number | null;
+  evidence_length?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
   extracted_at?: string | null;
@@ -171,6 +174,14 @@ export type SceneExtractionOut = {
   fastus_stage0_negated_claims?: number;
   fastus_stage0_rejected_fragments?: number;
   fastus_events?: FastusDebugEventOut[];
+  llm_recall_total?: number;
+  fastus_draft_total?: number;
+  regex_claim_total?: number;
+  after_dedupe_total?: number;
+  anchored_total?: number;
+  unanchored_total?: number;
+  needs_review_pipeline_total?: number;
+  rejected_fragment_total?: number;
 };
 
 export type SceneDetailOut = {

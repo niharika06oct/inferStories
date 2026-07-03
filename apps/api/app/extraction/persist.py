@@ -15,7 +15,7 @@ from app.claim_identity import (
     norm_evidence,
     predicate_merge_key,
 )
-from app.extraction.extract import status_for_confidence
+from app.extraction.extract import resolve_extracted_status
 from app.extraction.merge import (
     MergeStats,
     append_confidence_history,
@@ -42,7 +42,7 @@ def _claim_to_row(
     resolved,
     valid_from_scene: int | None = None,
 ) -> Claim:
-    status = status_for_confidence(extracted.confidence)
+    status = resolve_extracted_status(extracted)
     is_plotline = extracted.claim_type == "plotline_fact"
     now = _utc_now()
     row = Claim(

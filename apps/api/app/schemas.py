@@ -58,6 +58,7 @@ class EntityOut(BaseModel):
     story_id: int
     canonical_name: str
     entity_type: str
+    place_granularity: Optional[str] = None
     type_confidence: float = 0.0
     graph_eligible: bool = False
     aliases: list[str] = Field(default_factory=list)
@@ -85,6 +86,9 @@ class ClaimOut(BaseModel):
     evidence_text: Optional[str] = None
     source: str = "manual"
     generation_origin: str = "unknown"
+    evidence_anchored: Optional[bool] = None
+    evidence_offset: Optional[int] = None
+    evidence_length: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     extracted_at: Optional[datetime] = None
@@ -179,6 +183,12 @@ class ChunkExtractionDebugOut(BaseModel):
     fastus_llm_refined_count: int = 0
     fastus_llm_rejected_count: int = 0
     fastus_llm_cache_hit: bool = False
+    llm_recall_count: int = 0
+    fastus_extracted_count: int = 0
+    regex_claim_count: int = 0
+    after_dedupe_count: int = 0
+    anchored_count: int = 0
+    unanchored_count: int = 0
     fastus_events: list[FastusDebugEventOut] = Field(default_factory=list)
 
 
@@ -203,6 +213,14 @@ class SceneExtractionOut(BaseModel):
     fastus_stage0_negated_claims: int = 0
     fastus_stage0_rejected_fragments: int = 0
     fastus_events: list[FastusDebugEventOut] = Field(default_factory=list)
+    llm_recall_total: int = 0
+    fastus_draft_total: int = 0
+    regex_claim_total: int = 0
+    after_dedupe_total: int = 0
+    anchored_total: int = 0
+    unanchored_total: int = 0
+    needs_review_pipeline_total: int = 0
+    rejected_fragment_total: int = 0
 
 
 class SceneCreate(BaseModel):

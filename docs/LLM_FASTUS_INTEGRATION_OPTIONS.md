@@ -9,7 +9,7 @@
 - [`FASTUS_ChatGPT.md`](./FASTUS_ChatGPT.md) — FASTUS stage mapping and target architecture (reference; do not edit for implementation tracking).
 - [`README.md`](../README.md) — Current shipped behavior and dev setup.
 
-**Last updated:** June 2026 (FASTUS stages 0–9 instrumented; primary output still structural + family regex + Stage 6 LLM).
+**Last updated:** June 2026 (FASTUS stages 0–9; **Option B shipped** behind `FASTUS_LLM_FIRST=1`).
 
 ---
 
@@ -158,12 +158,16 @@ flowchart TB
 - **Cost** — 1 LLM call per chunk minimum; optional second refine call if 6b enabled.
 - **Latency** — LLM-first adds wall-clock before parse (can run LLM ∥ parse per chunk if desired).
 
-### Proposed env
+### Env (implemented)
 
 | Variable | Effect |
 |----------|--------|
-| `FASTUS_LLM_FIRST=1` | Enable Stage 6a always before stages 1–5. |
-| `FASTUS_LLM_REFINE=0` | Skip 6b when LLM-first already returns final-shaped claims. |
+| `FASTUS_LLM_FIRST=1` | Enable Stage 6a LLM recall; parallel with FASTUS 1–5 + regex; union + dedupe. |
+| `FASTUS_LLM_REFINE=0` | Skip Stage 6 refine when using LLM-first (default pairing). |
+| `FASTUS_STRICT_ANCHORING=0` | Unanchored recall → `needs_review`; `1` drops unanchored recall. |
+| `FASTUS_LLM_CACHE_DIR=...` | Disk cache for recall (`recall_{hash}.json`) and refine. |
+
+**Code:** `app/extraction/llm_recall.py`, `evidence_anchor.py`, `source_dedupe.py`; wired in `extract.py`.
 
 ### When to choose
 

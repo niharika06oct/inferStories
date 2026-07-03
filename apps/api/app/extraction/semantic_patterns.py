@@ -19,6 +19,7 @@ from app.extraction.schema import CLAIM_TYPES, CanonLevel, ExtractedClaim
 from app.extraction.structural import _predicate_from_verb
 from app.nlp.entity_candidates import EntityCandidate
 from app.nlp.phrase_candidates import _EMOTION_ADJECTIVES
+from app.location_compatibility import refine_location_predicate
 from app.nlp.relation_candidates import RelationCandidate
 
 ClaimDraftStatus = Literal["suggested", "needs_review", "approved"]
@@ -29,7 +30,7 @@ CONFIDENCE_NEEDS_REVIEW = 0.65
 
 _FAMILY_PREDICATE_SUFFIX = "_of"
 _LOCATION_PREDICATES = frozenset(
-    {"in", "at", "from", "to", "near", "around", "lives_in", "located_in", "traveled_to"}
+    {"in", "at", "from", "to", "near", "around", "lives_in", "lives_at", "located_in", "traveled_to"}
 )
 _TIME_MARKER_RE = re.compile(
     r"\b(?:yesterday|today|tomorrow|last\s+(?:night|week|month|year|summer|winter)|"
@@ -199,7 +200,6 @@ def relation_to_claim_draft(
 ) -> ClaimDraft | None:
     """Map one RelationCandidate to a ClaimDraft, or None if invalid."""
     subject = (relation.subject_surface or "").strip()
-    target = (relation.object_surface or "").strip()
     if not subject:
         return None
 
@@ -208,6 +208,12 @@ def relation_to_claim_draft(
         return None
 
     evidence = (relation.evidence_text or "").strip()
+    target = (relation.object_surface or "").strip()
+    predicate = refine_location_predicate(
+        predicate,
+        target,
+        evidence=evidence,
+    )
     subj_type = _entity_type_for_surface(subject, entity_candidates, evidence=evidence)
     obj_type = (
         _entity_type_for_surface(target, entity_candidates, evidence=evidence)
@@ -293,5 +299,6 @@ def claim_draft_to_extracted(draft: ClaimDraft) -> ExtractedClaim:
         canon_level=draft.canon_level,
         evidence=draft.evidence_text,
         chunk_index=draft.chunk_index,
-        generation_origin="structural",
+        generation_origin="fastus",
+        review_status=draft.status,
     )

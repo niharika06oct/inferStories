@@ -30,6 +30,7 @@ _OBJECT_TRANSITION_PREDICATES = frozenset(
         "girlfriend_of",
         "cares_for",
         "lives_in",
+        "lives_at",
         "located_in",
     }
 )

@@ -99,6 +99,14 @@ def _extraction_summary(
         fastus_spacy_available=result.fastus_spacy_available,
         fastus_stage0_negated_claims=result.fastus_stage0_negated_claims,
         fastus_stage0_rejected_fragments=result.fastus_stage0_rejected_fragments,
+        rejected_fragment_total=result.fastus_stage0_rejected_fragments,
+        llm_recall_total=result.llm_recall_total,
+        fastus_draft_total=result.fastus_draft_total,
+        regex_claim_total=result.regex_claim_total,
+        after_dedupe_total=result.after_dedupe_total,
+        anchored_total=result.anchored_total,
+        unanchored_total=result.unanchored_total,
+        needs_review_pipeline_total=result.needs_review_pipeline_total,
         fastus_events=[
             FastusDebugEventOut(**e.model_dump()) for e in result.fastus_events
         ]
@@ -126,6 +134,15 @@ def _extraction_summary(
                 fastus_has_dependencies=c.fastus_has_dependencies,
                 fastus_entity_candidate_count=c.fastus_entity_candidate_count,
                 fastus_phrase_candidate_count=c.fastus_phrase_candidate_count,
+                fastus_llm_refined_count=c.fastus_llm_refined_count,
+                fastus_llm_rejected_count=c.fastus_llm_rejected_count,
+                fastus_llm_cache_hit=c.fastus_llm_cache_hit,
+                llm_recall_count=c.llm_recall_count,
+                fastus_extracted_count=c.fastus_extracted_count,
+                regex_claim_count=c.regex_claim_count,
+                after_dedupe_count=c.after_dedupe_count,
+                anchored_count=c.anchored_count,
+                unanchored_count=c.unanchored_count,
                 fastus_events=[
                     FastusDebugEventOut(**e.model_dump()) for e in c.fastus_events
                 ],

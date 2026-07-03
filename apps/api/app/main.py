@@ -283,6 +283,7 @@ def list_story_entities(
             story_id=e.story_id,
             canonical_name=e.canonical_name,
             entity_type=e.entity_type,
+            place_granularity=e.place_granularity,
             type_confidence=float(e.type_confidence or 0),
             graph_eligible=bool(e.graph_eligible),
             aliases=_aliases_for_out(e.aliases),
@@ -363,7 +364,7 @@ def get_scene(
         text=scene.text,
         pov_character=scene.pov_character,
         created_at=scene.created_at,
-        claims=[claim_to_out(c) for c in scene.claims],
+        claims=[claim_to_out(c, scene_text=scene.text) for c in scene.claims],
     )
 
 
@@ -572,7 +573,8 @@ def update_claim_status(
 
     db.commit()
     db.refresh(claim)
-    return claim_to_out(claim)
+    scene_row = db.get(Scene, claim.scene_id)
+    return claim_to_out(claim, scene_text=scene_row.text if scene_row else None)
 
 
 @app.post("/stories/{story_id}/validate", response_model=list[ValidationIssueOut])

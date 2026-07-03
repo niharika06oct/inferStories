@@ -73,9 +73,12 @@ OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini
 # OPENAI_BASE_URL=https://api.openai.com/v1
 
-# FASTUS pipeline debug + LLM fallback (see docs/LLM_FASTUS_INTEGRATION_OPTIONS.md)
-# FASTUS_DEBUG=1       # Stage 0–9 lifecycle lines on API stderr at startup + on Save & analyze memory
-# FASTUS_LLM_LEGACY=1  # Full-chunk LLM extract when FASTUS claim drafts are empty
+# FASTUS pipeline (see docs/LLM_FASTUS_INTEGRATION_OPTIONS.md)
+# FASTUS_DEBUG=1            # Stage 0–9 lifecycle lines on API stderr
+# FASTUS_LLM_FIRST=1        # Option B: LLM recall + FASTUS grounding + regex union
+# FASTUS_LLM_REFINE=0       # Skip Stage 6 refine when using LLM-first
+# FASTUS_STRICT_ANCHORING=0 # Unanchored recall → needs_review (1 = drop)
+# FASTUS_LLM_LEGACY=1       # Full-chunk LLM when drafts empty (non-LLM_FIRST path)
 
 # Optional: use AI only after rule-based continuity candidates are found.
 # CONTINUITY_AI_JUDGE_ENABLED=1

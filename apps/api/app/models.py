@@ -35,6 +35,9 @@ class Entity(Base):
     entity_type: Mapped[str] = mapped_column(
         String(32), default="character", nullable=False
     )
+    place_granularity: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
     type_confidence: Mapped[float] = mapped_column(default=0.0, nullable=False)
     graph_eligible: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
@@ -116,7 +119,7 @@ class Claim(Base):
     chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)
     generation_origin: Mapped[str] = mapped_column(
-        String(20), default="unknown", nullable=False
+        String(64), default="unknown", nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False

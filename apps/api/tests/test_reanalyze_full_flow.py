@@ -78,6 +78,17 @@ def test_version_only_bumps_on_same_entity_hash(client):
     manual_id = manual["id"]
     v0 = manual["claim_version"]
 
+    trust_initial = next(
+        c
+        for c in claims
+        if "trust" in (c.get("predicate") or "").lower()
+        or "trust" in (c.get("claim_text") or "").lower()
+    )
+    client.patch(
+        f"/stories/{sid}/scenes/{scene_id}/claims/{trust_initial['id']}",
+        json={"status": "approved"},
+    )
+
     client.patch(
         f"/stories/{sid}/scenes/{scene_id}",
         json={

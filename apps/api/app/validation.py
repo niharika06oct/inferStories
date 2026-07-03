@@ -13,6 +13,10 @@ from app.continuity_judge import (
 from app.entity_registry import _CLAIM_TYPE_SLUGS, infer_predicate_from_claim
 from app.models import Claim, Scene, ValidationIssue
 from app.validation_evidence import continuity_anchor_in_scene
+from app.location_compatibility import (
+    is_location_predicate,
+    location_facts_compatible,
+)
 from app.validation_issue_detail import (
     build_evidence_comparison,
     build_explanation,
@@ -458,6 +462,18 @@ def validate_scene_claims(
                     ),
                     validation_stats=validation_stats,
                 )
+                continue
+
+            location_pair = is_location_predicate(np) and is_location_predicate(op)
+            if no != oo and location_pair and location_facts_compatible(
+                db,
+                old_object=old_claim.claim_object,
+                new_object=claim.claim_object,
+                old_object_entity_id=old_claim.object_entity_id,
+                new_object_entity_id=claim.object_entity_id,
+                old_evidence=(old_claim.evidence_text or old_claim.claim_text or ""),
+                new_evidence=(claim.evidence_text or claim.claim_text or ""),
+            ):
                 continue
 
             if np == op and no != oo and _same_predicate_different_object_is_conflict(

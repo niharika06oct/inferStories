@@ -24,8 +24,25 @@ CLAIM_TYPES = (
 CanonLevel = Literal["core", "active", "soft"]
 
 # How the claim was produced before DB persist (distinct from Claim.source manual/extracted).
-GenerationOrigin = Literal["structural", "family", "llm", "heuristic"]
-GENERATION_ORIGINS: tuple[str, ...] = ("structural", "family", "llm", "heuristic")
+GenerationOrigin = Literal[
+    "structural",
+    "family",
+    "llm",
+    "llm_recall",
+    "fastus",
+    "heuristic",
+]
+GENERATION_ORIGINS: tuple[str, ...] = (
+    "structural",
+    "family",
+    "llm",
+    "llm_recall",
+    "fastus",
+    "heuristic",
+)
+
+Importance = Literal["low", "medium", "high"]
+ReviewStatus = Literal["suggested", "needs_review", "approved"]
 
 
 class ExtractedClaim(BaseModel):
@@ -48,7 +65,20 @@ class ExtractedClaim(BaseModel):
     chunk_index: int = Field(default=0, ge=0)
     generation_origin: GenerationOrigin = Field(
         default="structural",
-        description="Pipeline step that produced this claim (structural, family, llm, heuristic).",
+        description="Pipeline step that produced this claim.",
+    )
+    secondary_origins: list[str] = Field(
+        default_factory=list,
+        description="Additional sources after source-aware dedupe (e.g. fastus+llm_recall).",
+    )
+    anchored: bool | None = Field(
+        default=None,
+        description="True when evidence quote appears in chunk text.",
+    )
+    importance: Importance = "medium"
+    review_status: ReviewStatus | None = Field(
+        default=None,
+        description="Override confidence-based status after anchoring.",
     )
 
 
@@ -79,6 +109,12 @@ class ChunkExtractionDebug(BaseModel):
     fastus_llm_refined_count: int = 0
     fastus_llm_rejected_count: int = 0
     fastus_llm_cache_hit: bool = False
+    llm_recall_count: int = 0
+    fastus_extracted_count: int = 0
+    regex_claim_count: int = 0
+    after_dedupe_count: int = 0
+    anchored_count: int = 0
+    unanchored_count: int = 0
     fastus_events: list[FastusDebugEventOut] = Field(default_factory=list)
 
 
@@ -100,3 +136,10 @@ class ExtractionResult(BaseModel):
     fastus_stage0_negated_claims: int = 0
     fastus_stage0_rejected_fragments: int = 0
     fastus_events: list[FastusDebugEventOut] = Field(default_factory=list)
+    llm_recall_total: int = 0
+    fastus_draft_total: int = 0
+    regex_claim_total: int = 0
+    after_dedupe_total: int = 0
+    anchored_total: int = 0
+    unanchored_total: int = 0
+    needs_review_pipeline_total: int = 0

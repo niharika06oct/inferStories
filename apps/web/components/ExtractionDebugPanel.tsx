@@ -44,6 +44,29 @@ export function ExtractionDebugPanel({ extraction }: ExtractionDebugPanelProps) 
               <dd>{formatGenerationBreakdown(extraction.generation_counts)}</dd>
             </>
           ) : null}
+          {(extraction.llm_recall_total ?? 0) > 0 ||
+          (extraction.after_dedupe_total ?? 0) > 0 ? (
+            <>
+              <dt>LLM recall claims</dt>
+              <dd>{extraction.llm_recall_total ?? 0}</dd>
+              <dt>FASTUS drafts</dt>
+              <dd>{extraction.fastus_draft_total ?? 0}</dd>
+              <dt>Regex claims</dt>
+              <dd>{extraction.regex_claim_total ?? 0}</dd>
+              <dt>After dedupe</dt>
+              <dd>{extraction.after_dedupe_total ?? 0}</dd>
+              <dt>Anchored</dt>
+              <dd>{extraction.anchored_total ?? 0}</dd>
+              <dt>Needs review (pipeline)</dt>
+              <dd>{extraction.needs_review_pipeline_total ?? 0}</dd>
+              <dt>Rejected fragments</dt>
+              <dd>
+                {extraction.rejected_fragment_total ??
+                  extraction.fastus_stage0_rejected_fragments ??
+                  0}
+              </dd>
+            </>
+          ) : null}
         </dl>
 
         {extraction.large_chapter_warning ? (

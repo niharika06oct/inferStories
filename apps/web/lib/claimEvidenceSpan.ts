@@ -12,38 +12,59 @@ type ClaimAnchor = Pick<
   | "claim_text"
   | "evidence_text"
   | "status"
+  | "evidence_offset"
+  | "evidence_length"
 >;
 
-/** Locate the evidence quote (or subject name) inside chapter text. */
+/** Locate the evidence quote inside chapter text for claim focus/highlight. */
 export function findClaimEvidenceSpan(
   chapterText: string,
-  claim: Pick<ClaimOut, "evidence_text" | "subject" | "target" | "object">,
+  claim: Pick<
+    ClaimOut,
+    | "evidence_text"
+    | "claim_text"
+    | "subject"
+    | "target"
+    | "object"
+    | "evidence_offset"
+    | "evidence_length"
+  >,
 ): TextSpan | null {
-  const evidence = claim.evidence_text?.trim();
-  if (evidence) {
-    const fromEvidence = findSubstringSpan(chapterText, evidence);
-    if (fromEvidence) return fromEvidence;
-    if (evidence.length > 48) {
-      const short = evidence.slice(0, 48).trim();
-      const partial = findSubstringSpan(chapterText, short);
-      if (partial) return partial;
+  const off = claim.evidence_offset;
+  const len = claim.evidence_length ?? 0;
+  if (off != null && off >= 0 && len > 0 && off < chapterText.length) {
+    const slice = chapterText.slice(off, off + len);
+    if (slice.length > 0) {
+      return { offset: off, length: Math.min(len, slice.length) };
     }
   }
 
-  const subject = claim.subject?.trim();
-  if (subject.length >= 2) {
-    const subjSpan = findSubstringSpan(chapterText, subject);
-    if (subjSpan) return subjSpan;
+  const entityTokens = entityTokensFromClaim(claim);
+
+  const evidence = claim.evidence_text?.trim();
+  if (evidence) {
+    for (const sentence of evidenceSentenceCandidates(evidence)) {
+      const fromEvidence = findSubstringSpan(chapterText, sentence);
+      if (fromEvidence) return fromEvidence;
+      const overlap = findTokenOverlapSpan(chapterText, sentence, entityTokens);
+      if (overlap) return overlap;
+    }
   }
 
-  const target = claim.target?.trim();
-  if (target && target.length >= 2) {
-    return findSubstringSpan(chapterText, target);
+  const claimText = claim.claim_text?.trim();
+  if (claimText) {
+    const fromClaim = findSubstringSpan(chapterText, claimText);
+    if (fromClaim) return fromClaim;
+    const overlap = findTokenOverlapSpan(chapterText, claimText, entityTokens);
+    if (overlap) return overlap;
   }
 
-  const object = claim.object?.trim();
-  if (object && object.length >= 2) {
-    return findSubstringSpan(chapterText, object);
+  const object = (claim.target ?? claim.object)?.trim();
+  if (object && object.length >= 4) {
+    const fromObject = findSubstringSpan(chapterText, object);
+    if (fromObject) {
+      return expandToSentence(chapterText, fromObject.offset, fromObject.length);
+    }
   }
 
   return null;
@@ -148,50 +169,9 @@ export function findContinuityAnchorSpan(
     };
   }
 
-  const evidence = claim?.evidence_text?.trim();
-  if (evidence) {
-    const fromEvidence = findSubstringSpan(
-      chapterText,
-      evidence,
-      preferredOffset,
-    );
-    if (fromEvidence) return fromEvidence;
-    if (evidence.length > 24) {
-      const partial = findSubstringSpan(
-        chapterText,
-        evidence.slice(0, 72).trim(),
-        preferredOffset,
-      );
-      if (partial) return partial;
-    }
-  }
-
-  const claimText = claim?.claim_text?.trim();
-  if (claimText) {
-    const fromClaimText = findSubstringSpan(
-      chapterText,
-      claimText,
-      preferredOffset,
-    );
-    if (fromClaimText) return fromClaimText;
-    if (claimText.length > 24) {
-      const partial = findSubstringSpan(
-        chapterText,
-        claimText.slice(0, 72).trim(),
-        preferredOffset,
-      );
-      if (partial) return partial;
-    }
-  }
-
-  const object = (claim?.target ?? claim?.object)?.trim();
-  if (object && object.length >= 3) {
-    const objectSentence = findSentenceContaining(
-      chapterText,
-      object,
-      preferredOffset,
-    );
-    if (objectSentence) return objectSentence;
+  if (claim) {
+    const fromClaim = findClaimEvidenceSpan(chapterText, claim);
+    if (fromClaim) return fromClaim;
   }
 
   return null;
@@ -221,6 +201,133 @@ function spanMatchesAnchor(
   return at === expected;
 }
 
+function evidenceSentenceCandidates(evidence: string): string[] {
+  const parts = evidence
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return [evidence];
+  return [...parts].sort((a, b) => a.length - b.length);
+}
+
+function entityTokensFromClaim(
+  claim: Pick<ClaimOut, "subject" | "target" | "object" | "claim_text">,
+): Set<string> {
+  const stop = new Set([
+    "the",
+    "and",
+    "was",
+    "were",
+    "that",
+    "this",
+    "with",
+    "from",
+    "they",
+    "them",
+    "their",
+    "have",
+    "been",
+    "when",
+    "what",
+    "into",
+    "about",
+    "after",
+    "before",
+    "each",
+    "several",
+    "started",
+    "recognize",
+    "faces",
+    "class",
+  ]);
+  const out = new Set<string>();
+  for (const field of [
+    claim.subject,
+    claim.target ?? claim.object,
+    claim.claim_text,
+  ]) {
+    const norm = normalizeForMatch(field);
+    for (const token of norm.match(/[a-z']{3,}/g) ?? []) {
+      if (!stop.has(token)) out.add(token);
+    }
+  }
+  return out;
+}
+
+function findTokenOverlapSpan(
+  text: string,
+  anchor: string,
+  requiredTokens?: Set<string>,
+): TextSpan | null {
+  const tokens = normalizeForMatch(anchor)
+    .split(/\s+/)
+    .flatMap((w) => w.match(/[a-z']{4,}/g) ?? [])
+    .filter((t) => t.length >= 4);
+  if (tokens.length < 3) return null;
+
+  const sentenceRe = /[^.!?\n]+[.!?]?/g;
+  let best: TextSpan | null = null;
+  let bestHits = 0;
+  let match: RegExpExecArray | null;
+  while ((match = sentenceRe.exec(text)) != null) {
+    const sentence = match[0];
+    const lowered = sentence.toLowerCase();
+    const hits = tokens.filter((t) => lowered.includes(t)).length;
+    const minHits = Math.max(2, Math.ceil(tokens.length / 2));
+    if (hits < minHits) continue;
+    if (
+      requiredTokens &&
+      requiredTokens.size > 0 &&
+      ![...requiredTokens].some((t) => lowered.includes(t))
+    ) {
+      continue;
+    }
+    const entityBonus =
+      requiredTokens && [...requiredTokens].some((t) => lowered.includes(t)) ? 2 : 0;
+    const score = hits + entityBonus;
+    if (score > bestHits) {
+      const trimmed = sentence.trim();
+      const lead = trimmed ? sentence.indexOf(trimmed[0]) : 0;
+      const start = match.index + Math.max(0, lead);
+      const length = Math.min(trimmed.length || sentence.length, 240);
+      best = { offset: start, length: Math.max(1, length) };
+      bestHits = score;
+    }
+  }
+  return best;
+}
+
+const MIN_EVIDENCE_CHARS = 20;
+
+function expandToSentence(
+  text: string,
+  offset: number,
+  length: number,
+): TextSpan {
+  if (length >= MIN_EVIDENCE_CHARS) {
+    return { offset, length };
+  }
+  const start = Math.max(
+    text.lastIndexOf(".", offset - 1),
+    text.lastIndexOf("!", offset - 1),
+    text.lastIndexOf("?", offset - 1),
+    text.lastIndexOf("\n", offset - 1),
+  );
+  const sentenceStart = start < 0 ? 0 : start + 1;
+  const slice = text.slice(offset);
+  const endRel = [".", "!", "?", "\n"]
+    .map((ch) => slice.indexOf(ch))
+    .filter((idx) => idx >= 0);
+  const sentenceEnd =
+    endRel.length > 0
+      ? offset + Math.min(...endRel) + 1
+      : Math.min(text.length, offset + 240);
+  return {
+    offset: sentenceStart,
+    length: Math.max(1, Math.min(sentenceEnd - sentenceStart, 240)),
+  };
+}
+
 function findSubstringSpan(
   text: string,
   needle: string,
@@ -233,10 +340,10 @@ function findSubstringSpan(
 
   let best = matches[0]!;
   let bestDist = Math.abs(best.offset - preferredOffset);
-  for (const match of matches) {
-    const dist = Math.abs(match.offset - preferredOffset);
+  for (const m of matches) {
+    const dist = Math.abs(m.offset - preferredOffset);
     if (dist < bestDist) {
-      best = match;
+      best = m;
       bestDist = dist;
     }
   }

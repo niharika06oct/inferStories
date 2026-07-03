@@ -13,6 +13,7 @@ from app.entity_registry import (
     get_or_create_entity,
     infer_predicate_from_claim,
 )
+from app.location_compatibility import refine_location_predicate
 from app.extraction.schema import ExtractedClaim
 from app.models import Claim
 
@@ -75,6 +76,12 @@ def resolve_extracted(
             sentence=context,
             evidence=evidence,
             role="object",
+        )
+        predicate = refine_location_predicate(
+            predicate,
+            target,
+            evidence=evidence,
+            entity=obj_ent,
         )
 
     claim_type = refine_claim_type(

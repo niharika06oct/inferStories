@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
@@ -22,8 +23,24 @@ from app.nlp.chapter_parse import is_spacy_available, parse_chunk
 from app.nlp.entity_candidates import extract_entity_candidates
 from app.nlp.phrase_candidates import extract_phrase_candidates
 from app.nlp.relation_candidates import extract_relation_candidates
-from app.extraction.semantic_patterns import ClaimDraft, relations_to_claim_drafts
+from app.extraction.semantic_patterns import (
+    ClaimDraft,
+    claim_draft_to_extracted,
+    relations_to_claim_drafts,
+)
 from app.extraction.llm_refine import drafts_to_extracted_passthrough, refine_claim_drafts
+from app.extraction.llm_recall import (
+    RecallResult,
+    llm_first_enabled,
+    llm_refine_enabled,
+    recall_claims_from_chunk,
+)
+from app.extraction.evidence_anchor import (
+    apply_evidence_anchoring,
+    filter_unanchored_if_strict,
+)
+from app.extraction.source_dedupe import merge_source_claims
+from app.location_compatibility import refine_extracted_location_claim
 from app.nlp.fastus_debug import emit, log_stage
 from app.extraction.llm_refine import _legacy_extract_enabled
 from app.extraction.pov import normalize_claims_for_pov
@@ -82,6 +99,13 @@ def status_for_confidence(confidence: float) -> str:
     if confidence >= CONFIDENCE_NEEDS_REVIEW:
         return "needs_review"
     return "suggested"
+
+
+def resolve_extracted_status(claim: ExtractedClaim) -> str:
+    """Prefer pipeline review_status (anchoring) over raw confidence tiers."""
+    if claim.review_status:
+        return claim.review_status
+    return status_for_confidence(claim.confidence)
 
 
 def _heuristic_extract_chunk(text: str, chunk_index: int) -> list[ExtractedClaim]:
@@ -358,6 +382,23 @@ def extract_claims_from_text(
     chunks_without_drafts = 0
     any_openai_refine = False
     any_passthrough = False
+    use_llm_first = llm_first_enabled() and has_key
+    total_llm_recall = 0
+    total_fastus_extracted = 0
+    total_regex_claims = 0
+    total_after_dedupe = 0
+    total_anchored = 0
+    total_unanchored = 0
+    total_needs_review_pipeline = 0
+
+    if use_llm_first:
+        log_stage(
+            scene_fastus_events,
+            stage="6a",
+            lifecycle="begin",
+            message="LLM recall for major story claims (FASTUS_LLM_FIRST=1)",
+            max_events=120,
+        )
 
     for i, chunk in enumerate(chunks):
         chunk_fastus_events: list[FastusDebugEventOut] = []
@@ -502,10 +543,244 @@ def extract_claims_from_text(
 
         entities = detect_entities(chunk)
         all_entities.update(entities)
-        structural = structural_extract_chunk(chunk, i, pov_character=pov_character)
-        family = family_extract_chunk(
-            chunk, i, pov_character=pov_character, cast=cast
+
+        known_entity_names = sorted(
+            {*(cast or []), *(entities or []), *(ec.surface_text for ec in entity_candidates[:24])}
         )
+
+        llm_recall_count = 0
+        fastus_extracted_count = 0
+        regex_claim_count = 0
+        after_dedupe_count = 0
+        chunk_anchored = 0
+        chunk_unanchored = 0
+        recall_cache_hit = False
+
+        structural: list[ExtractedClaim] = []
+        family: list[ExtractedClaim] = []
+        llm_claims: list[ExtractedClaim] = []
+        openai_attempted = False
+        openai_ok = False
+        fallback_used = False
+        llm_rejected = 0
+        llm_cache_hit = False
+        llm_refined_count = 0
+
+        if use_llm_first:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                recall_future = pool.submit(
+                    recall_claims_from_chunk,
+                    chunk,
+                    i,
+                    total,
+                    pov_character=pov_character,
+                    known_entities=known_entity_names,
+                )
+                rules_future = pool.submit(
+                    lambda: (
+                        structural_extract_chunk(
+                            chunk, i, pov_character=pov_character
+                        ),
+                        family_extract_chunk(
+                            chunk, i, pov_character=pov_character, cast=cast
+                        ),
+                    )
+                )
+                try:
+                    recall_result = recall_future.result()
+                except ExtractionAPIError as exc:
+                    api_error = str(exc)
+                    recall_result = RecallResult(claims=[], attempted=True, ok=False)
+                structural, family = rules_future.result()
+
+            if recall_result.attempted:
+                any_openai = True
+                openai_attempted = True
+            if recall_result.ok:
+                openai_ok = True
+            recall_cache_hit = recall_result.cache_hit
+            llm_recall_count = len(recall_result.claims)
+            total_llm_recall += llm_recall_count
+
+            emit(
+                chunk_fastus_events,
+                stage="6a",
+                event="llm_recall",
+                message=f"LLM recall returned {llm_recall_count} claim(s)",
+                detail={
+                    "chunk_index": i,
+                    "cache_hit": "true" if recall_cache_hit else "false",
+                    "raw": recall_result.raw_count,
+                },
+            )
+            for claim in recall_result.claims[:8]:
+                emit(
+                    chunk_fastus_events,
+                    stage="6a",
+                    event="llm_recall_claim",
+                    message=f"[{claim.claim_type}] {claim.claim}",
+                    detail={
+                        "predicate": claim.predicate,
+                        "polarity": "true" if claim.polarity else "false",
+                        "importance": claim.importance,
+                    },
+                )
+
+            fastus_extracted = [
+                apply_evidence_anchoring(
+                    claim_draft_to_extracted(d),
+                    chunk,
+                    importance="medium",
+                )
+                for d in claim_drafts
+            ]
+            fastus_extracted_count = len(fastus_extracted)
+            total_fastus_extracted += fastus_extracted_count
+
+            recall_anchored = [
+                apply_evidence_anchoring(c, chunk, importance=c.importance)
+                for c in recall_result.claims
+            ]
+            regex_anchored = [
+                apply_evidence_anchoring(c, chunk) for c in structural + family
+            ]
+            regex_claim_count = len(regex_anchored)
+            total_regex_claims += regex_claim_count
+
+            unioned = merge_source_claims(
+                regex_anchored + fastus_extracted + recall_anchored
+            )
+            unioned = [refine_extracted_location_claim(c) for c in unioned]
+            unioned, strict_dropped = filter_unanchored_if_strict(unioned)
+            after_dedupe_count = len(unioned)
+            total_after_dedupe += after_dedupe_count
+            chunk_anchored = sum(1 for c in unioned if c.anchored)
+            chunk_unanchored = sum(1 for c in unioned if c.anchored is False)
+            total_anchored += chunk_anchored
+            total_unanchored += chunk_unanchored
+            total_needs_review_pipeline += sum(
+                1 for c in unioned if resolve_extracted_status(c) == "needs_review"
+            )
+
+            emit(
+                chunk_fastus_events,
+                stage="6a",
+                event="union_dedupe",
+                message=(
+                    f"Union: recall={llm_recall_count} fastus={fastus_extracted_count} "
+                    f"regex={regex_claim_count} → {after_dedupe_count} after dedupe"
+                ),
+                detail={
+                    "anchored": chunk_anchored,
+                    "unanchored": chunk_unanchored,
+                    "strict_dropped": strict_dropped,
+                },
+            )
+
+            llm_claims = []
+            llm_refined_count = 0
+            all_claims.extend(unioned)
+        else:
+            structural = structural_extract_chunk(chunk, i, pov_character=pov_character)
+            family = family_extract_chunk(
+                chunk, i, pov_character=pov_character, cast=cast
+            )
+
+            try:
+                (
+                    llm_claims,
+                    openai_attempted,
+                    openai_ok,
+                    fallback_used,
+                    llm_rejected,
+                    llm_cache_hit,
+                    llm_refined_count,
+                ) = _llm_extract_chunk(
+                    chunk,
+                    i,
+                    total,
+                    has_key=has_key,
+                    pov_character=pov_character,
+                    claim_drafts=claim_drafts,
+                )
+            except ExtractionAPIError as exc:
+                api_error = str(exc)
+                llm_claims = normalize_claims_for_pov(
+                    _heuristic_extract_chunk(chunk, i), pov_character
+                )
+                openai_attempted = has_key
+                openai_ok = False
+                fallback_used = True
+
+            emit(
+                chunk_fastus_events,
+                stage="6",
+                event="llm_refine",
+                message=(
+                    f"LLM refined {llm_refined_count} claim(s) from "
+                    f"{len(claim_drafts)} draft(s)"
+                    + (" (cache hit)" if llm_cache_hit else "")
+                ),
+                detail={
+                    "chunk_index": i,
+                    "rejected": llm_rejected,
+                    "cache_hit": "true" if llm_cache_hit else "false",
+                    "fallback": "true" if fallback_used else "false",
+                },
+            )
+            for claim in llm_claims[:8]:
+                emit(
+                    chunk_fastus_events,
+                    stage="6",
+                    event="llm_refined_claim",
+                    message=f"[{claim.claim_type}] {claim.claim}",
+                    detail={
+                        "predicate": claim.predicate,
+                        "polarity": "true" if claim.polarity else "false",
+                        "confidence": f"{claim.confidence:.2f}",
+                    },
+                )
+
+            if not openai_ok and llm_claims:
+                kept_structural: list[ExtractedClaim] = []
+                boosted_llm: list[ExtractedClaim] = []
+                for llm in llm_claims:
+                    replaces = [
+                        s
+                        for s in structural
+                        if _structural_redundant_with_llm(s, llm)
+                    ]
+                    if replaces and _predicate_family(llm.predicate) == "trust":
+                        llm = llm.model_copy(
+                            update={"confidence": max(llm.confidence, 0.9)}
+                        )
+                    boosted_llm.append(llm)
+                for s in structural:
+                    if not any(
+                        _structural_redundant_with_llm(s, llm) for llm in boosted_llm
+                    ):
+                        kept_structural.append(s)
+                llm_claims = boosted_llm
+                structural = kept_structural
+                any_fastus_llm = True
+                llm_refined_count = len(llm_claims)
+            elif openai_ok and llm_claims:
+                llm_claims = filter_redundant_llm_claims(
+                    llm_claims, structural + family
+                )
+                llm_refined_count = len(llm_claims)
+
+            total_llm_output += len(llm_claims)
+            if openai_ok:
+                any_openai_refine = True
+            elif llm_claims and claim_drafts:
+                any_passthrough = True
+
+            any_openai = any_openai or openai_attempted
+            any_fallback = any_fallback or fallback_used
+            all_claims.extend(structural)
+            all_claims.extend(family)
+            all_claims.extend(llm_claims)
 
         # --- FASTUS Stage 0: polarity on rule extractions ---
         for c in structural + family:
@@ -524,112 +799,6 @@ def extract_claims_from_text(
                         "polarity": "false",
                     },
                 )
-
-        llm_claims: list[ExtractedClaim] = []
-        openai_attempted = False
-        openai_ok = False
-        fallback_used = False
-        llm_rejected = 0
-        llm_cache_hit = False
-        llm_refined_count = 0
-
-        try:
-            (
-                llm_claims,
-                openai_attempted,
-                openai_ok,
-                fallback_used,
-                llm_rejected,
-                llm_cache_hit,
-                llm_refined_count,
-            ) = _llm_extract_chunk(
-                chunk,
-                i,
-                total,
-                has_key=has_key,
-                pov_character=pov_character,
-                claim_drafts=claim_drafts,
-            )
-        except ExtractionAPIError as exc:
-            api_error = str(exc)
-            llm_claims = normalize_claims_for_pov(
-                _heuristic_extract_chunk(chunk, i), pov_character
-            )
-            openai_attempted = has_key
-            openai_ok = False
-            fallback_used = True
-
-        emit(
-            chunk_fastus_events,
-            stage="6",
-            event="llm_refine",
-            message=(
-                f"LLM refined {llm_refined_count} claim(s) from "
-                f"{len(claim_drafts)} draft(s)"
-                + (" (cache hit)" if llm_cache_hit else "")
-            ),
-            detail={
-                "chunk_index": i,
-                "rejected": llm_rejected,
-                "cache_hit": "true" if llm_cache_hit else "false",
-                "fallback": "true" if fallback_used else "false",
-            },
-        )
-        for claim in llm_claims[:8]:
-            emit(
-                chunk_fastus_events,
-                stage="6",
-                event="llm_refined_claim",
-                message=f"[{claim.claim_type}] {claim.claim}",
-                detail={
-                    "predicate": claim.predicate,
-                    "polarity": "true" if claim.polarity else "false",
-                    "confidence": f"{claim.confidence:.2f}",
-                },
-            )
-
-        if not openai_ok and llm_claims:
-            # FASTUS passthrough wins over regex structural for the same fact.
-            kept_structural: list[ExtractedClaim] = []
-            boosted_llm: list[ExtractedClaim] = []
-            for llm in llm_claims:
-                replaces = [
-                    s
-                    for s in structural
-                    if _structural_redundant_with_llm(s, llm)
-                ]
-                # Auto-approve only when replacing regex trust extraction (Ch.13 regression).
-                if replaces and _predicate_family(llm.predicate) == "trust":
-                    llm = llm.model_copy(
-                        update={"confidence": max(llm.confidence, 0.9)}
-                    )
-                boosted_llm.append(llm)
-            for s in structural:
-                if not any(
-                    _structural_redundant_with_llm(s, llm) for llm in boosted_llm
-                ):
-                    kept_structural.append(s)
-            llm_claims = boosted_llm
-            structural = kept_structural
-            any_fastus_llm = True
-            llm_refined_count = len(llm_claims)
-        elif openai_ok and llm_claims:
-            llm_claims = filter_redundant_llm_claims(
-                llm_claims, structural + family
-            )
-            llm_refined_count = len(llm_claims)
-
-        total_llm_output += len(llm_claims)
-        if openai_ok:
-            any_openai_refine = True
-        elif llm_claims and claim_drafts:
-            any_passthrough = True
-
-        any_openai = any_openai or openai_attempted
-        any_fallback = any_fallback or fallback_used
-        all_claims.extend(structural)
-        all_claims.extend(family)
-        all_claims.extend(llm_claims)
 
         chunk_debug.append(
             ChunkExtractionDebug(
@@ -650,11 +819,34 @@ def extract_claims_from_text(
                 fastus_claim_draft_count=len(claim_drafts),
                 fastus_llm_refined_count=llm_refined_count,
                 fastus_llm_rejected_count=llm_rejected,
-                fastus_llm_cache_hit=llm_cache_hit,
+                fastus_llm_cache_hit=llm_cache_hit or recall_cache_hit,
+                llm_recall_count=llm_recall_count,
+                fastus_extracted_count=fastus_extracted_count,
+                regex_claim_count=regex_claim_count,
+                after_dedupe_count=after_dedupe_count,
+                anchored_count=chunk_anchored,
+                unanchored_count=chunk_unanchored,
                 fastus_events=chunk_fastus_events,
             )
         )
         scene_fastus_events.extend(chunk_fastus_events)
+
+    if use_llm_first:
+        log_stage(
+            scene_fastus_events,
+            stage="6a",
+            lifecycle="complete",
+            message=(
+                f"LLM recall {total_llm_recall} · FASTUS {total_fastus_extracted} · "
+                f"regex {total_regex_claims} → {total_after_dedupe} after dedupe"
+            ),
+            detail={
+                "anchored": total_anchored,
+                "unanchored": total_unanchored,
+                "needs_review": total_needs_review_pipeline,
+            },
+            max_events=120,
+        )
 
     log_stage(
         scene_fastus_events,
@@ -708,8 +900,19 @@ def extract_claims_from_text(
             max_events=120,
         )
 
-    if total_claim_drafts == 0:
-        if has_key and _legacy_extract_enabled():
+    if use_llm_first and not llm_refine_enabled():
+        log_stage(
+            scene_fastus_events,
+            stage="6",
+            lifecycle="skip",
+            message="Stage 6 refine skipped (FASTUS_LLM_FIRST + FASTUS_LLM_REFINE=0)",
+            detail={"mode": "llm_recall_first"},
+            max_events=120,
+        )
+    elif total_claim_drafts == 0:
+        if use_llm_first:
+            pass
+        elif has_key and _legacy_extract_enabled():
             log_stage(
                 scene_fastus_events,
                 stage="6",
@@ -775,6 +978,7 @@ def extract_claims_from_text(
         max_events=120,
     )
     stage0_reject_events: list[FastusDebugEventOut] = []
+    all_claims = [refine_extracted_location_claim(c) for c in all_claims]
     filtered = filter_extracted_claims(
         all_claims,
         pov_character=pov_character,
@@ -804,7 +1008,7 @@ def extract_claims_from_text(
         )
     any_openai_ok = any(c.openai_ok for c in chunk_debug)
     filtered, suppressed_structural = suppress_redundant_structural_claims(
-        filtered, llm_active=any_openai_ok or any_fastus_llm
+        filtered, llm_active=any_openai_ok or any_fastus_llm or use_llm_first
     )
     deduped = _dedupe_claims(filtered)
     if any_openai and any_fallback:
@@ -817,7 +1021,7 @@ def extract_claims_from_text(
     return ExtractionResult(
         claims=deduped,
         suppressed_structural_count=suppressed_structural,
-        source=source,
+        source="openai" if use_llm_first and any_openai else source,
         chunk_count=total,
         word_count=word_count(text),
         error=api_error,
@@ -831,4 +1035,11 @@ def extract_claims_from_text(
         fastus_stage0_negated_claims=stage0_negated,
         fastus_stage0_rejected_fragments=stage0_rejected,
         fastus_events=scene_fastus_events[:120],
+        llm_recall_total=total_llm_recall,
+        fastus_draft_total=total_fastus_extracted,
+        regex_claim_total=total_regex_claims,
+        after_dedupe_total=total_after_dedupe,
+        anchored_total=total_anchored,
+        unanchored_total=total_unanchored,
+        needs_review_pipeline_total=total_needs_review_pipeline,
     )
